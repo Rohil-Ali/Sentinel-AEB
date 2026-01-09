@@ -1,0 +1,14 @@
+# --- Core Model Library ---
+ultralytics
+
+# --- Computer Vision & Data ---
+opencv-python
+pandas
+numpy
+matplotlib
+seaborn
+Pillow
+
+# --- Jupyter Notebook Support ---
+ipykernel
+notebook

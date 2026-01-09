@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from email.mime import image
 import time
 import queue
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ class VehicleState:
     speed_mps: float
     speed_mph: float
     brake: float
+    throttle: float 
    
 class CarlaAdapter:
     def __init__(
@@ -55,15 +55,15 @@ class CarlaAdapter:
             return
         
         self.client = carla.Client(self.host, self.port)
-        self.client.set_timeout(10.0)
+        self.client.set_timeout(20.0)
         self.world = self.client.get_world()
         blueprint_library = self.world.get_blueprint_library()
 
         # Spawn vehicle
-        vehicle_bp = blueprint_library.filter(self.vehicle_filter)[0]
-        if not vehicle_bp:
+        vehicle_bps = blueprint_library.filter(self.vehicle_filter)
+        if not vehicle_bps:
             raise RuntimeError(f"No vehicle blueprint found for filter: {self.vehicle_filter}")
-        vehicle_bp = vehicle_bp[0] 
+        vehicle_bp = vehicle_bps[0] 
 
         spawn_points = self.world.get_map().get_spawn_points()
         if not spawn_points:
@@ -84,7 +84,7 @@ class CarlaAdapter:
         def _on_image(image: carla.Image) -> None:
             try: 
                 while self._img_queue.qsize() > 0:
-                    _=self.img_queue.get_nowait()
+                    _=self._img_queue.get_nowait()
             except queue.Empty:
                 pass
             self._img_queue.put(image)
@@ -127,7 +127,7 @@ class CarlaAdapter:
         return bgr
 
     def get_frame(self, timeout: float = 0.05) -> Optional[np.ndarray]:
-        # Returns latest BGR frame as np.ndarray, or None if no new frame arrived. Non-blocking-ish: waits up to `timeout` seconds.
+        # Returns latest BGR frame as np.ndarray, or None if no new frame arrived.
         if not self._running:
             return None
 
@@ -138,7 +138,7 @@ class CarlaAdapter:
             self._last_frame_ts = time.time()
             return frame
         except queue.Empty:
-            # Return last frame if we have one (helps UI remain smooth)
+            # Return last frame if we have one
             return self._last_frame
 
     def get_state(self) -> Optional[VehicleState]:
@@ -154,6 +154,7 @@ class CarlaAdapter:
         return VehicleState(
             speed_mps=speed_mps,
             speed_mph=speed_mph,
+            throttle=float(ctrl.throttle),
             brake=float(ctrl.brake),
         )
     

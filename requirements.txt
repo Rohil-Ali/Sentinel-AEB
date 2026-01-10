@@ -5,10 +5,7 @@ ultralytics
 opencv-python
 pandas
 numpy
-matplotlib
-seaborn
-Pillow
+
 
 # --- Jupyter Notebook Support ---
 ipykernel
-notebook

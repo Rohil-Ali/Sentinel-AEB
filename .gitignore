@@ -2,4 +2,9 @@
 venv/
 
 # Research files
+research/dataset
+research/yolo26n.pt
+research/yolov8s.pt
 
+# model weights
+runs/

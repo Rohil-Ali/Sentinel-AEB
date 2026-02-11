@@ -67,16 +67,16 @@ class AEBController:
         history_len: int = 6,            
         growth_ref: float = 0.0035,      
 
-        soft_threshold: float = 0.45,
-        hard_threshold: float = 0.65,
+        soft_threshold: float = 0.35,
+        hard_threshold: float = 0.60,
 
-        debounce_frames: int = 3,
+        debounce_frames: int = 0,
         cooldown_s: float = 1.0,
 
         match_max_dist_norm: float = 0.12,
 
         # Brake strengths
-        soft_brake: float = 0.35,
+        soft_brake: float = 1.0,
         hard_brake: float = 1.0,
 
         # Speed influence
@@ -132,7 +132,7 @@ class AEBController:
             self.state = AEBState.BRAKING
             return AEBDecision(
                 state=self.state,
-                command=BrakeCommand.NO_ACTION,  # controller says "no new trigger", main may keep brake applied separately
+                command=BrakeCommand.HARD_BRAKE,  # controller says "no new trigger", main may keep brake applied separately
                 brake=0.0,
                 risk=0.0,
                 closeness_now=0.0,
@@ -171,6 +171,22 @@ class AEBController:
         # Speed scaling 
         risk = self._apply_speed_scaling(risk_base, vehicle.speed_mps)
 
+        # --- Emergency override: if risk is already hard, do NOT debounce ---
+        if risk >= self.hard_threshold:
+            self._trigger(now_s)
+            self.state = AEBState.BRAKING
+            return AEBDecision(
+                state=self.state,
+                command=BrakeCommand.HARD_BRAKE,
+                brake=self.hard_brake,
+                risk=risk,
+                closeness_now=closeness_now,
+                approach_score=approach_score,
+                target=target,
+                reason="hard_threshold_no_debounce",
+            )
+
+
         # Debounce logic
         danger_now = risk >= self.soft_threshold
         if danger_now:
@@ -189,21 +205,6 @@ class AEBController:
                 approach_score=approach_score,
                 target=target,
                 reason=f"debounce_{self._danger_streak}/{self.debounce_frames}",
-            )
-
-        # Decide brake severity
-        if risk >= self.hard_threshold:
-            self._trigger(now_s)
-            self.state = AEBState.BRAKING
-            return AEBDecision(
-                state=self.state,
-                command=BrakeCommand.HARD_BRAKE,
-                brake=self.hard_brake,
-                risk=risk,
-                closeness_now=closeness_now,
-                approach_score=approach_score,
-                target=target,
-                reason="hard_threshold",
             )
 
         # Soft braking

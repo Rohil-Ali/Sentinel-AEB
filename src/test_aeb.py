@@ -1,183 +1,363 @@
-# run_aeb_carla_demo.py
-"""
-CARLA AEB controller demo:
-- Uses CarlaAdapter to get frames + speed
-- Uses YOLODetector to get detections
-- Uses AEBController to decide braking
-- Overlays debug info so you can tune thresholds
-
-Controls:
-  Q = quit
-  C = toggle forward corridor filter
-  B = toggle AEB enabled
-  R/F = increase/decrease conf threshold
-  T/G = increase/decrease soft threshold
-  Y/H = increase/decrease hard threshold
-  U/J = increase/decrease growth_ref
-  1/2 = set brake mode (1 = soft only, 2 = soft+hard)
-"""
-
+# carla_aeb_live_test.py
 from __future__ import annotations
 
 import time
-import cv2
+import math
+import queue
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
 
-from carla_adapter import CarlaAdapter
+import numpy as np
+import cv2
+import pygame
+import carla
+
 from detector import YOLODetector
-from aeb_controller import AEBController, VehicleKinematics, BrakeCommand
+from aeb_controller import AEBController, VehicleKinematics
+
+
+@dataclass
+class EgoControl:
+    throttle: float = 0.0
+    brake: float = 0.0
+    steer: float = 0.0
+    hand_brake: bool = False
+    reverse: bool = False
 
 
 def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+def carla_image_to_bgr(image: carla.Image) -> np.ndarray:
+    arr = np.frombuffer(image.raw_data, dtype=np.uint8)
+    arr = arr.reshape((image.height, image.width, 4))  # BGRA
+    return arr[:, :, :3]  # BGR
+
+
+def get_speed_mps(vehicle: carla.Vehicle) -> float:
+    v = vehicle.get_velocity()
+    return float(math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z))
+
+
+def set_synchronous(world: carla.World, enable: bool, fixed_dt: float = 0.05) -> None:
+    settings = world.get_settings()
+    settings.synchronous_mode = enable
+    settings.fixed_delta_seconds = fixed_dt if enable else None
+    world.apply_settings(settings)
+
+
+def find_open_road_map(client: carla.Client, preferred: str = "Town04") -> carla.World:
+    """
+    Town04 is a fairly open highway map.
+    If it fails, fall back to current world.
+    """
+    try:
+        return client.load_world(preferred)
+    except Exception:
+        return client.get_world()
+
+
+def spawn_ego(world: carla.World) -> carla.Vehicle:
+    blueprints = world.get_blueprint_library()
+    vehicle_bp = blueprints.filter("vehicle.tesla.model3")[0]
+
+    spawn_points = world.get_map().get_spawn_points()
+    if not spawn_points:
+        raise RuntimeError("No spawn points found on this map.")
+
+    ego = world.spawn_actor(vehicle_bp, spawn_points[0])
+    ego.set_autopilot(False)
+    return ego
+
+
+def spawn_rgb_camera(
+    world: carla.World,
+    attach_to: carla.Actor,
+    width: int = 960,
+    height: int = 540,
+    fov: int = 90,
+) -> Tuple[carla.Sensor, "queue.Queue[carla.Image]"]:
+    blueprints = world.get_blueprint_library()
+    cam_bp = blueprints.find("sensor.camera.rgb")
+    cam_bp.set_attribute("image_size_x", str(width))
+    cam_bp.set_attribute("image_size_y", str(height))
+    cam_bp.set_attribute("fov", str(fov))
+
+    cam_transform = carla.Transform(carla.Location(x=1.5, z=1.4))
+    cam = world.spawn_actor(cam_bp, cam_transform, attach_to=attach_to)
+
+    q: "queue.Queue[carla.Image]" = queue.Queue(maxsize=2)
+
+    def _on_image(img: carla.Image) -> None:
+        try:
+            while q.qsize() > 0:
+                _ = q.get_nowait()
+        except queue.Empty:
+            pass
+        q.put(img)
+
+    cam.listen(_on_image)
+    return cam, q
+
+
+def waypoint_ahead(world: carla.World, ego: carla.Vehicle, meters: float) -> carla.Waypoint:
+    m = world.get_map()
+    wp = m.get_waypoint(ego.get_location(), project_to_road=True, lane_type=carla.LaneType.Driving)
+    nxt = wp.next(meters)
+    if not nxt:
+        return wp
+    return nxt[0]
+
+
+def spawn_static_vehicle_ahead(world: carla.World, ego: carla.Vehicle, meters: float = 25.0) -> carla.Vehicle:
+    blueprints = world.get_blueprint_library()
+    candidates = blueprints.filter("vehicle.*")
+    veh_bp = candidates[0]
+
+    wp = waypoint_ahead(world, ego, meters)
+    transform = wp.transform
+    transform.location.z += 0.2
+
+    v = world.try_spawn_actor(veh_bp, transform)
+    if v is None:
+        raise RuntimeError("Failed to spawn static vehicle. Try again or change distance.")
+    v.set_autopilot(False)
+    try:
+        v.set_simulate_physics(False)  # keeps it parked
+    except Exception:
+        pass
+    return v
+
+
+def spawn_static_pedestrian_ahead(world: carla.World, ego: carla.Vehicle, meters: float = 20.0) -> carla.Actor:
+    blueprints = world.get_blueprint_library()
+    walker_bps = blueprints.filter("walker.pedestrian.*")
+    if not walker_bps:
+        raise RuntimeError("No pedestrian blueprints found.")
+    walker_bp = walker_bps[0]
+
+    wp = waypoint_ahead(world, ego, meters)
+    transform = wp.transform
+
+    # Put the pedestrian near lane center.
+    # You can offset x/y later if you want them on the side.
+    transform.location.z += 0.2
+
+    ped = world.try_spawn_actor(walker_bp, transform)
+    if ped is None:
+        raise RuntimeError("Failed to spawn pedestrian. Try again or change distance.")
+
+    # Keep pedestrian static: no AI controller spawned
+    return ped
+
+
+def init_pygame() -> None:
+    pygame.init()
+    pygame.display.set_mode((320, 240))
+    pygame.display.set_caption("CARLA AEB Test Controls")
+
+
+def read_controls(ctrl: EgoControl) -> EgoControl:
+    """
+    Keyboard controls:
+      W: increase throttle
+      S: brake
+      A/D: steer
+      Space: hand brake
+      R: reset inputs
+      Esc: quit
+    """
+    keys = pygame.key.get_pressed()
+
+    # Throttle and brake
+    if keys[pygame.K_w]:
+        ctrl.throttle = clamp(ctrl.throttle + 0.03, 0.0, 1.0)
+    else:
+        ctrl.throttle = clamp(ctrl.throttle - 0.02, 0.0, 1.0)
+
+    if keys[pygame.K_s]:
+        ctrl.brake = clamp(ctrl.brake + 0.06, 0.0, 1.0)
+        ctrl.throttle = 0.0
+    else:
+        ctrl.brake = clamp(ctrl.brake - 0.06, 0.0, 1.0)
+
+    # Steering
+    steer_target = 0.0
+    if keys[pygame.K_a]:
+        steer_target = -1.0
+    elif keys[pygame.K_d]:
+        steer_target = 1.0
+
+    # Smooth steering
+    ctrl.steer = ctrl.steer + (steer_target - ctrl.steer) * 0.2
+    ctrl.steer = clamp(ctrl.steer, -1.0, 1.0)
+
+    ctrl.hand_brake = bool(keys[pygame.K_SPACE])
+
+    return ctrl
+
+
+def apply_ego_control(vehicle: carla.Vehicle, ctrl: EgoControl) -> None:
+    vehicle.apply_control(
+        carla.VehicleControl(
+            throttle=ctrl.throttle,
+            brake=ctrl.brake,
+            steer=ctrl.steer,
+            hand_brake=ctrl.hand_brake,
+            reverse=ctrl.reverse,
+        )
+    )
+
+
+def overlay_status(
+    frame: np.ndarray,
+    text_lines: List[str],
+    x: int = 10,
+    y: int = 25,
+) -> np.ndarray:
+    out = frame.copy()
+    for line in text_lines:
+        cv2.putText(out, line, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        y += 25
+    return out
+
+
 def main():
-    # --- Adapter ---
-    adapter = CarlaAdapter(autopilot=True, image_width=960, image_height=540)
-    adapter.start()
+    # Start CARLA server first, then run this script.
+    client = carla.Client("localhost", 2000)
+    client.set_timeout(10.0)
 
-    # --- Detector ---
-    detector = YOLODetector(
-        weights_path="yolov8n.pt",
-        conf_thresh=0.25,
-        iou_thresh=0.45,
-        use_corridor=True,
-        corridor_x_min=0.30,
-        corridor_x_max=0.70,
-        min_bottom_y=0.45,
-    )
+    world = find_open_road_map(client, preferred="Town04")
+    set_synchronous(world, enable=True, fixed_dt=0.05)
 
-    # --- Controller ---
-    controller = AEBController(
-        debounce_frames=3,
-        cooldown_s=0.8,
-        soft_threshold=0.45,
-        hard_threshold=0.65,
-        growth_ref=0.01,          # start conservative; tune with U/J
-        speed_risk_gain=0.25,
-        soft_brake=0.35,
-        hard_brake=1.0,
-    )
-
-    aeb_enabled = True
-    corridor_enabled = detector.use_corridor
-    allow_hard_brake = True
-
-    last_print = 0.0
-    fps_counter = 0
-    fps_start = time.perf_counter()
-    fps = 0.0
-
-    print("✅ AEB demo running. Press Q to quit.")
+    actors_to_destroy: List[carla.Actor] = []
 
     try:
+        ego = spawn_ego(world)
+        actors_to_destroy.append(ego)
+
+        camera, img_q = spawn_rgb_camera(world, ego, width=960, height=540, fov=90)
+        actors_to_destroy.append(camera)
+
+        # Defaults as requested
+        detector = YOLODetector()         # keep detector defaults
+        controller = AEBController()      # keep controller defaults
+
+        init_pygame()
+        ctrl = EgoControl()
+
+        print("Controls:")
+        print("  W/A/S/D drive, Space hand brake, R reset inputs, Esc quit")
+        print("  1 spawn pedestrian ahead, 2 spawn static vehicle ahead, 3 clear spawned objects")
+
+        # Simple braking hold so you can see it happening
+        hold_brake_until = 0.0
+        hold_brake_value = 0.0
+
+        spawned_test_objects: List[carla.Actor] = []
+
         while True:
-            frame = adapter.get_frame()
-            if frame is None:
+            # Pygame event pump
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return
+                    if event.key == pygame.K_r:
+                        ctrl = EgoControl()
+                    if event.key == pygame.K_1:
+                        ped = spawn_static_pedestrian_ahead(world, ego, meters=20.0)
+                        spawned_test_objects.append(ped)
+                        actors_to_destroy.append(ped)
+                        print("Spawned pedestrian ~20m ahead.")
+                    if event.key == pygame.K_2:
+                        v = spawn_static_vehicle_ahead(world, ego, meters=25.0)
+                        spawned_test_objects.append(v)
+                        actors_to_destroy.append(v)
+                        print("Spawned static vehicle ~25m ahead.")
+                    if event.key == pygame.K_3:
+                        for a in spawned_test_objects:
+                            try:
+                                a.destroy()
+                            except Exception:
+                                pass
+                        spawned_test_objects.clear()
+                        print("Cleared spawned test objects.")
+
+            # Tick the world (sync mode)
+            world.tick()
+
+            # Read camera frame
+            frame = None
+            try:
+                img = img_q.get(timeout=1.0)
+                frame = carla_image_to_bgr(img)
+            except queue.Empty:
                 continue
 
-            # FPS calc
-            fps_counter += 1
-            dt = time.perf_counter() - fps_start
-            if dt >= 1.0:
-                fps = fps_counter / dt
-                fps_counter = 0
-                fps_start = time.perf_counter()
+            # Manual driving input
+            ctrl = read_controls(ctrl)
 
-            # Vehicle state
-            state = adapter.get_state()
-            speed_mps = state.speed_mps if state else 0.0
-            kin = VehicleKinematics(speed_mps=speed_mps)
-
-            # Detection + decision
-            detector.use_corridor = corridor_enabled
+            # Run detection + controller
             detections = detector.predict(frame)
-            decision = controller.update(detections, frame.shape, kin)
 
-            # Apply braking
-            applied_brake = 0.0
-            if aeb_enabled:
-                if decision.command == BrakeCommand.SOFT_BRAKE:
-                    applied_brake = decision.brake
-                    adapter.apply_control(throttle=0.0, brake=applied_brake)
-                elif decision.command == BrakeCommand.HARD_BRAKE and allow_hard_brake:
-                    applied_brake = decision.brake
-                    adapter.apply_control(throttle=0.0, brake=applied_brake)
+            speed_mps = get_speed_mps(ego)
+            decision = controller.update(
+                detections=detections,
+                frame_shape=frame.shape,
+                vehicle=VehicleKinematics(speed_mps=speed_mps),
+            )
+
+            # Decide whether to override with AEB braking
+            now = time.time()
+            if decision.command.name in ("SOFT_BRAKE", "HARD_BRAKE"):
+                hold_brake_value = decision.brake
+                hold_brake_until = now + 0.8  # hold for visibility
+
+            if now < hold_brake_until:
+                # Override user input with AEB brake
+                ctrl.throttle = 0.0
+                ctrl.brake = max(ctrl.brake, hold_brake_value)
+
+            apply_ego_control(ego, ctrl)
 
             # Visualize
             vis = frame
-            vis = detector.draw_corridor(vis) if corridor_enabled else vis
+            if detector.use_corridor:
+                vis = detector.draw_corridor(vis)
             vis = detector.draw_detections(vis, detections)
 
-            # HUD text
-            h, w = vis.shape[:2]
+            mph = speed_mps * 2.23693629
             lines = [
-                f"AEB: {'ON' if aeb_enabled else 'OFF'}   Corridor: {'ON' if corridor_enabled else 'OFF'}   FPS: {fps:.1f}",
-                f"Speed: {speed_mps*2.23693629:.1f} mph   CtrlBrake: {state.brake:.2f}" if state else "Speed: n/a",
-                f"Decision: {decision.state} / {decision.command}   AppliedBrake: {applied_brake:.2f}",
-                f"Risk: {decision.risk:.2f}  CloseNow: {decision.closeness_now:.2f}  Approach: {decision.approach_score:.2f}",
-                f"conf={detector.conf_thresh:.2f}  soft={controller.soft_threshold:.2f}  hard={controller.hard_threshold:.2f}  growth_ref={controller.growth_ref:.4f}",
+                f"Speed: {mph:.1f} mph",
+                f"State: {decision.state}",
+                f"Cmd: {decision.command} brake={decision.brake:.2f}",
+                f"Risk: {decision.risk:.2f} close={decision.closeness_now:.2f} appr={decision.approach_score:.2f}",
                 f"Reason: {decision.reason}",
             ]
+            vis = overlay_status(vis, lines)
 
-            y = 25
-            for line in lines:
-                cv2.putText(vis, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                y += 24
-
-            cv2.imshow("Sentinel AEB - CARLA Demo (tune live)", vis)
-
-            # Optional console status every ~1s
-            now = time.time()
-            if now - last_print > 1.0:
-                last_print = now
-                top = detections[0].cls_name if detections else "none"
-                print(f"Top={top:>10}  speed={speed_mps*2.2369:5.1f}mph  risk={decision.risk:.2f}  cmd={decision.command}")
-
-            # Key handling
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), ord("Q")):
-                break
-
-            elif key in (ord("b"), ord("B")):
-                aeb_enabled = not aeb_enabled
-
-            elif key in (ord("c"), ord("C")):
-                corridor_enabled = not corridor_enabled
-
-            # conf threshold
-            elif key in (ord("r"), ord("R")):
-                detector.conf_thresh = clamp(detector.conf_thresh + 0.05, 0.05, 0.95)
-            elif key in (ord("f"), ord("F")):
-                detector.conf_thresh = clamp(detector.conf_thresh - 0.05, 0.05, 0.95)
-
-            # soft/hard thresholds
-            elif key in (ord("t"), ord("T")):
-                controller.soft_threshold = clamp(controller.soft_threshold + 0.02, 0.10, 0.95)
-            elif key in (ord("g"), ord("G")):
-                controller.soft_threshold = clamp(controller.soft_threshold - 0.02, 0.10, 0.95)
-
-            elif key in (ord("y"), ord("Y")):
-                controller.hard_threshold = clamp(controller.hard_threshold + 0.02, 0.10, 0.99)
-            elif key in (ord("h"), ord("H")):
-                controller.hard_threshold = clamp(controller.hard_threshold - 0.02, 0.10, 0.99)
-
-            # growth_ref tuning
-            elif key in (ord("u"), ord("U")):
-                controller.growth_ref = clamp(controller.growth_ref + 0.002, 0.001, 0.05)
-            elif key in (ord("j"), ord("J")):
-                controller.growth_ref = clamp(controller.growth_ref - 0.002, 0.001, 0.05)
-
-            # brake mode
-            elif key == ord("1"):
-                allow_hard_brake = False
-            elif key == ord("2"):
-                allow_hard_brake = True
+            cv2.imshow("CARLA AEB Live Test", vis)
+            if cv2.waitKey(1) & 0xFF in (ord("q"), ord("Q")):
+                return
 
     finally:
-        adapter.stop()
+        try:
+            set_synchronous(world, enable=False)
+        except Exception:
+            pass
+
+        for a in actors_to_destroy[::-1]:
+            try:
+                a.destroy()
+            except Exception:
+                pass
+
         cv2.destroyAllWindows()
-        print("🧹 Cleaned up.")
+        pygame.quit()
+        print("Clean exit.")
 
 
 if __name__ == "__main__":

@@ -3,8 +3,14 @@ venv/
 
 # Research files
 research/dataset
-research/yolo26n.pt
-research/yolov8s.pt
+research/best.pt
+research/models/weights/last.pt
+
+#test fiules
+test/
 
 # model weights
 runs/
+
+# model
+src/yolov8n.pt

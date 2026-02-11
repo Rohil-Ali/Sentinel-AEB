@@ -29,7 +29,7 @@ MAX_FRONT_DISTANCE_M = 60.0
 FRONT_CONE_DEG = 35.0     # actors must be within this angle from forward vector
 
 # YOLO settings
-YOLO_WEIGHTS = "yolov8n.pt"
+YOLO_WEIGHTS = "best.pt"
 CONF = 0.25
 IOU = 0.45
 
@@ -44,7 +44,7 @@ CENTER_Y_MIN = 0.20
 CENTER_Y_MAX = 0.95
 
 # Classes we care about (COCO names)
-TARGET_NAMES = {"person", "car", "truck", "bus", "motorcycle", "bicycle"}
+TARGET_NAMES = {'car', 'pedestrian', 'traffic light', 'traffic sign'}
 
 
 @dataclass

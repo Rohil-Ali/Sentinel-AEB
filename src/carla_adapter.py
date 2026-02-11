@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 import numpy as np
-import cv2
 
 import carla
 
@@ -27,7 +26,7 @@ class CarlaAdapter:
         image_height: int = 720,
         fov: int = 90,
         vehicle_filter: str = "vehicle.tesla.model3",
-        autopilot: bool = True,
+        autopilot: bool = True, #will change to false wihen system is done
     ):
         
         self.host = host
@@ -54,80 +53,33 @@ class CarlaAdapter:
         if self._running: 
             return
         
-        self.client = carla.Client(self.host, self.port)
-        self.client.set_timeout(20.0)
-        self.world = self.client.get_world()
-        blueprint_library = self.world.get_blueprint_library()
+        blueprint_library = self._connect() # connect to CARLA server
+        self._spawn_vehicle(blueprint_library) # Spawn vehicle
+        self._spawn_camera(blueprint_library) # spawn camera
 
-        # Spawn vehicle
-        vehicle_bps = blueprint_library.filter(self.vehicle_filter)
-        if not vehicle_bps:
-            raise RuntimeError(f"No vehicle blueprint found for filter: {self.vehicle_filter}")
-        vehicle_bp = vehicle_bps[0] 
-
-        spawn_points = self.world.get_map().get_spawn_points()
-        if not spawn_points:
-            raise RuntimeError("No spawn points found on this map.")
-        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_points[0])
-        self.vehicle.set_autopilot(self.autopilot)
-
-        # spawn camera
-        cam_bp = blueprint_library.find("sensor.camera.rgb")
-        cam_bp.set_attribute("image_size_x", str(self.image_width))
-        cam_bp.set_attribute("image_size_y", str(self.image_height))
-        cam_bp.set_attribute("fov", str(self.fov))
-
-        cam_transform = carla.Transform(carla.Location(x=1.5, z=1.4))
-        self.camera = self.world.spawn_actor(cam_bp, cam_transform, attach_to=self.vehicle)
-
-        # start recording/listening to camera
+        # start listening to camera
         def _on_image(image: carla.Image) -> None:
             try: 
                 while self._img_queue.qsize() > 0:
                     _=self._img_queue.get_nowait()
             except queue.Empty:
                 pass
-            self._img_queue.put(image)
-        
+            self._img_queue.put(image)   
         self.camera.listen(_on_image)
         self._running = True
 
     def stop(self):
         self._running = False
-
-        if self.camera is not None:
-            try:
-                self.camera.stop()
-            except Exception:
-                pass
-            try:
-                self.camera.destroy()
-            except Exception:
-                pass
-            self.camera = None
-
-        if self.vehicle is not None:
-            try:
-                self.vehicle.destroy()
-            except Exception:
-                pass
-            self.vehicle = None
-
+        
+        self._safe_destroy(self.camera)
+        self._safe_destroy(self.vehicle)
         self.world = None
         self.client = None
 
 
     # ---------- frame + telemetry ----------
-    @staticmethod
-    def _carla_image_to_bgr(image: carla.Image) -> np.ndarray:
-        # convert CARLA image to BGR numpy array
-        arr = np.frombuffer(image.raw_data, dtype=np.uint8)
-        arr = arr.reshape((image.height, image.width, 4))  # BGRA
-        bgr = arr[:, :, :3]  # drop alpha
-        return bgr
-
     def get_frame(self, timeout: float = 0.05) -> Optional[np.ndarray]:
-        # Returns latest BGR frame as np.ndarray, or None if no new frame arrived.
+        # Returns latest BGR frame as np.ndarray, or None if no new frame arroh ived.
         if not self._running:
             return None
 
@@ -176,9 +128,6 @@ class CarlaAdapter:
     def brake_full(self) -> None:
         self.apply_control(throttle=0.0, brake=1.0, steer=0.0)
 
-    def brake_soft(self) -> None:
-        self.apply_control(throttle=0.0, brake=0.3, steer=0.0)
-
 
     # ---------- environment ----------
 
@@ -192,3 +141,57 @@ class CarlaAdapter:
         weather.precipitation = intensity
         weather.precipitation_deposits = intensity  
         self.world.set_weather(weather)
+
+    # ---------- helper functions ----------
+    def _spawn_camera(self, blueprint_library):
+        cam_bp = blueprint_library.find("sensor.camera.rgb")
+        cam_bp.set_attribute("image_size_x", str(self.image_width))
+        cam_bp.set_attribute("image_size_y", str(self.image_height))
+        cam_bp.set_attribute("fov", str(self.fov))
+
+        cam_transform = carla.Transform(carla.Location(x=1.5, z=1.4))
+        self.camera = self.world.spawn_actor(cam_bp, cam_transform, attach_to=self.vehicle)
+
+    def _spawn_vehicle(self, blueprint_library):
+        vehicle_bps = blueprint_library.filter(self.vehicle_filter)
+        if not vehicle_bps:
+            raise RuntimeError(f"No vehicle blueprint found for filter: {self.vehicle_filter}")
+        vehicle_bp = vehicle_bps[0] 
+
+        spawn_points = self.world.get_map().get_spawn_points()
+        if not spawn_points:
+            raise RuntimeError("No spawn points found on this map.")
+        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_points[0])
+        self.vehicle.set_autopilot(self.autopilot)
+
+    def _connect(self):
+        self.client = carla.Client(self.host, self.port)
+        self.client.set_timeout(20.0)
+        self.world = self.client.get_world()
+        blueprint_library = self.world.get_blueprint_library()
+        return blueprint_library
+    
+    def _safe_destroy(self, actor):
+        if actor is None: 
+            return
+        
+        try: 
+            if hasattr(actor, "stop"):
+                actor.stop()
+        except Exception:
+            pass
+
+        try:
+            actor.destroy()
+        except Exception:
+            pass
+
+        actor = None
+
+    @staticmethod
+    def _carla_image_to_bgr(image: carla.Image) -> np.ndarray:
+        # convert CARLA image to BGR numpy array
+        arr = np.frombuffer(image.raw_data, dtype=np.uint8)
+        arr = arr.reshape((image.height, image.width, 4))  # BGRA
+        bgr = arr[:, :, :3]  # drop alpha
+        return bgr

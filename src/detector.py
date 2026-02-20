@@ -32,13 +32,13 @@ class YOLODetector:
     def __init__(
             self, 
             weights_path: str = "yolov8n.pt", 
-            conf_thresh: float = 0.25, 
+            conf_thresh: float = 0.45, 
             iou_thresh: float = 0.45, 
             target_classes: Optional[Iterable[str]] = None, 
             device: Optional[str] = None,
             use_corridor: bool = True,
-            corridor_x_min: float = 0.30,
-            corridor_x_max: float = 0.70,
+            corridor_x_min: float = 0.10,
+            corridor_x_max: float = 0.90,
             min_bottom_y: float = 0.45,
             ):
         

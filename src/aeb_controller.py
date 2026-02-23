@@ -28,15 +28,14 @@ class AEBConfig:
     soft_brake_threshold: float = 0.25   
     hard_brake_threshold: float = 0.40 
 
-    debounce_frames: int = 1
-    cooldown_frames: int = 20
+    debounce_frames: int = 3
+    release_debounce_frames: int = 5
 
     enabled: bool = True
+    speed_weight: float = 0.45
+    speed_fear_cap_mph: float = 35.0
 
-    speed_weight: float = 0.30
-    speed_mph_for_max: float = 35.0
-
-    min_brake_during_event: float = 0.65
+    min_brake_during_event: float = 0.6
 
 
 class AEBController:
@@ -56,11 +55,12 @@ class AEBController:
         self.state: AEBState = AEBState.SCANNING
 
         self._danger_streak = 0
-        self._cooldown_left = 0
+        self._safe_streak = 0
+        self._trigger_thresh = 0.0
+
         self._last_closest: Optional[Detection] = None
 
-        self._in_braking_event = False
-
+        
     def set_enabled(self, enabled: bool) -> None:
         self.cfg.enabled = bool(enabled)
         if not self.cfg.enabled:
@@ -81,59 +81,71 @@ class AEBController:
         self._last_closest = closest
         closeness = closest.closeness if closest else 0.0
 
-        speed_norm = min(1.0, speed_mph / max(1e-6, self.cfg.speed_mph_for_max))
+        speed_norm = min(1.0, speed_mph / max(1e-6, self.cfg.speed_fear_cap_mph))
 
         # calculate danger score
         danger_score = closeness * (1.0 + speed_norm * self.cfg.speed_weight)
         danger_score = float(max(0.0, min(1.0, danger_score)))        
 
-        # ------ Hard brake - no debounce  ------
-        # effective_hard_threshold = self.cfg.hard_brake_threshold
-        # if speed_mph >= 30.0:
-        #     effective_hard_threshold = 0.35  # be more aggressive at higher speeds
-        effective_hard_threshold = self.cfg.hard_brake_threshold - (0.12 * speed_norm)
+        effective_hard_threshold = self.cfg.hard_brake_threshold - (0.15 * speed_norm)
         effective_hard_threshold = float(max(0.20, min(self.cfg.hard_brake_threshold, effective_hard_threshold)))
 
         
         # ----- hard brake -----
         if danger_score >= effective_hard_threshold:
             self.state = AEBState.BRAKING
-            self._trigger_braking()
+            self._trigger_braking(effective_hard_threshold)
             return self._decision(
                 brake=1.0,
                 danger_score=danger_score,
-                reason=f"Hard Brake (threshold={effective_hard_threshold:.2f})",
+                reason=f"Hard Brake (triggered at threshold={self._trigger_thresh:.2f})",
                 closest=closest,
             )
+        
+        # ------ hold brake until danger clears ------
+        if self.state == AEBState.BRAKING:
+            if danger_score < (self.cfg.soft_brake_threshold - 0.10):
+                self._safe_streak += 1
+                self._danger_streak = 0
 
+                # release brake if safe
+                if self._safe_streak >= self.cfg.release_debounce_frames:
+                    self.state = AEBState.SCANNING
+                    self._safe_streak = 0
+                    return self._decision(
+                        brake=0.0,
+                        danger_score=danger_score,
+                        reason=f"Brake released (safe for {self.cfg.release_debounce_frames}f)",
+                        closest=closest,
+                    )
+                
+                # in release debounce - still breaking at the minimum brake
+                return self._decision(
+                    brake=self.cfg.min_brake_during_event,
+                    danger_score=danger_score,
+                    reason=f"Braking (safe streak {self._safe_streak}/{self.cfg.release_debounce_frames})",
+                    closest=closest,
+                )
+            else:
+                # danger still present 
+                self._safe_streak = 0
+                brake, reason = self._get_brake_score(danger_score, effective_hard_threshold)
 
-        # ------ Cooldown ------
-        if self._cooldown_left > 0:
-            self._cooldown_left -= 1
+                if brake < self.cfg.min_brake_during_event:
+                    brake = self.cfg.min_brake_during_event
+                    reason += " (maintaining minimum brake during event)"
 
-            # Decide brake strength based on current danger
-            brake, reason = self._get_brake_score(danger_score, effective_hard_threshold)
+                return self._decision(
+                    brake=brake,
+                    danger_score=danger_score,
+                    reason=f"Braking ({reason})",
+                    closest=closest,
+                )
 
-            # keeps braking until danger leaves
-            if self._in_braking_event:
-                brake = max(brake, self.cfg.min_brake_during_event)  # ensure we keep braking during cooldown
-
-            if speed_mph < 5.0 and danger_score < 0.15:
-                self._in_braking_event = False  # reset event if we're basically stopped and clear
-                brake = 0.0
-                self._cooldown_left = 0 # exit cooldown early if we're safe and slow
-
-            self.state = AEBState.BRAKING
-            return self._decision(
-                brake=brake,
-                danger_score=danger_score,
-                reason=f"Cooldown ({self._cooldown_left}f, brake={brake:.2f}, reason={reason})",
-                closest=closest,
-            )
-
-        # ----- Debounce ------
+        # ----- Debounce for danger scanning ------
         if danger_score >= self.cfg.soft_brake_threshold:
             self._danger_streak += 1
+            self._safe_streak = 0
         else:
             self._danger_streak = 0
 
@@ -141,7 +153,7 @@ class AEBController:
         if self._danger_streak >= self.cfg.debounce_frames:
             brake, reason = self._get_brake_score(danger_score, effective_hard_threshold)
             self.state = AEBState.BRAKING
-            self._trigger_braking()
+            self._trigger_braking(effective_hard_threshold)
 
             return self._decision(
                 brake=brake,
@@ -159,22 +171,18 @@ class AEBController:
             closest=closest,
         )
 
- 
-    
     # --------- helper ----------
 
     def reset_states(self) -> None:
         self.state = AEBState.SCANNING
         self._danger_streak = 0
-        self._cooldown_left = 0
+        self._safe_streak = 0
         self._last_closest = None
-        self._in_braking_event = False
 
-
-    def _trigger_braking(self):
-        self._cooldown_left = self.cfg.cooldown_frames
+    def _trigger_braking(self, threshold: float):
         self._danger_streak = 0
-        self._in_braking_event = True
+        self._safe_streak = 0
+        self._trigger_thresh = threshold
 
     def _get_brake_score(self, danger_score: float, hard_threshold: float) -> Tuple[float, str]:
         """
@@ -188,7 +196,7 @@ class AEBController:
             t = (danger_score - self.cfg.soft_brake_threshold) / max(
                 1e-6, (hard_threshold - self.cfg.soft_brake_threshold)
             )
-            return (0.6 + 0.4 * t, "Soft Brake")
+            return (self.cfg.min_brake_during_event + 0.5 * t, "Soft Brake")
         
         return (0.0, "No Brake")
         

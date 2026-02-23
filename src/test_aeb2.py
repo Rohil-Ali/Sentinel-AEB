@@ -49,9 +49,23 @@ def set_synchronous(world: carla.World, enable: bool, fixed_dt: float = 0.05) ->
 
 
 def load_open_map(client: carla.Client, preferred: str = "Town04") -> carla.World:
+    """Load a map by name. Returns current world if map not found."""
     try:
-        return client.load_world(preferred)
-    except Exception:
+        print(f"Attempting to load map: {preferred}")
+        # Try without MapLayer first (simpler)
+        world = client.load_world(preferred)
+        print(f"✓ Successfully loaded {preferred}")
+        return world
+    except Exception as e:
+        print(f"✗ Failed to load {preferred}: {e}")
+        print("Available maps:")
+        try:
+            maps = client.get_available_maps()
+            for m in maps:
+                print(f"  - {m}")
+        except Exception:
+            pass
+        print("Using current world instead")
         return client.get_world()
 
 
@@ -65,15 +79,25 @@ def overlay_lines(frame: np.ndarray, lines: List[str], x: int = 10, y: int = 25)
 
 # --------------- spawning ----------------
 
-def spawn_ego(world: carla.World) -> carla.Vehicle:
+def spawn_ego(world: carla.World, spawn_index: int = 50, backtrack_meters: float = 60.0) -> carla.Vehicle:
+    """Spawn ego vehicle at specific spawn point."""
     bps = world.get_blueprint_library()
     bp = bps.filter("vehicle.tesla.model3")[0]
 
     spawns = world.get_map().get_spawn_points()
+    spawn_point = spawns[spawn_index % len(spawns)]
     if not spawns:
         raise RuntimeError("No spawn points found on this map.")
-    ego = world.spawn_actor(bp, spawns[0])
+    
+    wp = world.get_map().get_waypoint(spawn_point.location)
+    prev_wps = wp.previous(backtrack_meters)
+    if prev_wps:
+        spawn_point = prev_wps[0].transform
+        spawn_point.location.z += 0.5  # Lift slightly to prevent clipping into the road
+
+    ego = world.spawn_actor(bp, spawn_point)
     ego.set_autopilot(False)
+    print(f"Spawned {backtrack_meters}m behind point {spawn_index}")
     return ego
 
 
@@ -233,16 +257,19 @@ def cruise_throttle_brake(current_mph: float, target_mph: float) -> Tuple[float,
 
 def main():
     client = carla.Client("localhost", 2000)
-    client.set_timeout(10.0)
+    client.set_timeout(70.0)
 
     world = load_open_map(client, preferred="Town04")
     set_synchronous(world, enable=True, fixed_dt=0.05)
 
     actors: List[carla.Actor] = []
     spawned_objects: List[carla.Actor] = []
+    
+    # Keep track of spawn index
+    current_spawn_index = 50
 
     try:
-        ego = spawn_ego(world)
+        ego = spawn_ego(world, spawn_index=current_spawn_index)
         actors.append(ego)
 
         cam, cam_q = spawn_rgb_camera(world, ego, width=960, height=540, fov=90)
@@ -263,15 +290,17 @@ def main():
         print("\nControls:")
         print("  A/D steer, SPACE handbrake, ESC quit")
         print("  C toggle cruise control on/off")
+        print("  R respawn vehicle at spawn point & clear objects")  # NEW
         print("  1 set target speed 15 mph")
         print("  2 set target speed 30 mph")
         print("  3 set target speed 40 mph")
+        print("  4-7 set target speed 50-80 mph")
         print("  P spawn pedestrian ahead")
         print("  V spawn static vehicle ahead")
         print("  X clear spawned objects")
         print("  If cruise is OFF: W/S throttle/brake manually\n")
 
-        # AEB hold so braking is visible (optional, but helps)
+        # AEB hold so braking is visible
         hold_until = 0.0
         hold_brake = 0.0
 
@@ -282,6 +311,54 @@ def main():
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         return
+
+                    # === NEW: RESPAWN KEY ===
+                    if event.key == pygame.K_r:
+                        print("Respawning vehicle and clearing objects...")
+                        
+                        # Clear all spawned test objects
+                        for a in spawned_objects:
+                            try:
+                                a.destroy()
+                            except Exception:
+                                pass
+                        spawned_objects.clear()
+                        
+                        # Destroy old camera
+                        try:
+                            cam.stop()
+                            cam.destroy()
+                            actors.remove(cam)
+                        except Exception as e:
+                            print(f"Error destroying camera: {e}")
+                        
+                        # Destroy old ego
+                        try:
+                            ego.destroy()
+                            actors.remove(ego)
+                        except Exception as e:
+                            print(f"Error destroying ego: {e}")
+                        
+                        # Respawn ego at same spawn point
+                        ego = spawn_ego(world, spawn_index=current_spawn_index)
+                        actors.append(ego)
+                        
+                        # Respawn camera attached to new ego
+                        cam, cam_q = spawn_rgb_camera(world, ego, width=960, height=540, fov=90)
+                        actors.append(cam)
+                        
+                        # Reset controller state
+                        controller.reset_states()
+                        
+                        # Reset control inputs
+                        ctrl = DriverControl(cruise_enabled=True, target_speed_mph=15.0)
+                        
+                        # Reset AEB hold
+                        hold_until = 0.0
+                        hold_brake = 0.0
+                        
+                        print("✓ Respawn complete!")
+                        continue  # Skip this frame
 
                     if event.key == pygame.K_c:
                         ctrl.cruise_enabled = not ctrl.cruise_enabled
@@ -298,18 +375,34 @@ def main():
                     if event.key == pygame.K_3:
                         ctrl.target_speed_mph = 40.0
                         print("Target speed set to 40 mph")
+                    if event.key == pygame.K_4:
+                        ctrl.target_speed_mph = 50.0
+                        print("Target speed set to 50 mph")
+                    if event.key == pygame.K_5:
+                        ctrl.target_speed_mph = 60.0
+                        print("Target speed set to 60 mph")
+                    if event.key == pygame.K_6:
+                        ctrl.target_speed_mph = 70.0
+                        print("Target speed set to 70 mph")
+                    if event.key == pygame.K_7:
+                        ctrl.target_speed_mph = 80.0
+                        print("Target speed set to 80 mph")
 
                     if event.key == pygame.K_p:
-                        ped = spawn_static_pedestrian_ahead(world, ego, meters=20.0)
+                        current_speed_mps = get_speed_mps(ego)
+                        spawn_dist = max(15.0, current_speed_mps * 4.0) 
+                        ped = spawn_static_pedestrian_ahead(world, ego, meters=spawn_dist)
                         spawned_objects.append(ped)
                         actors.append(ped)
-                        print("Spawned pedestrian ~20m ahead")
+                        print(f"Spawned pedestrian {spawn_dist:.1f}m ahead")
 
                     if event.key == pygame.K_v:
-                        veh = spawn_static_vehicle_ahead(world, ego, meters=25.0)
+                        current_speed_mps = get_speed_mps(ego)
+                        spawn_dist = max(15.0, current_speed_mps * 4.0)
+                        veh = spawn_static_vehicle_ahead(world, ego, meters=spawn_dist)
                         spawned_objects.append(veh)
                         actors.append(veh)
-                        print("Spawned static vehicle ~25m ahead")
+                        print(f"Spawned static vehicle {spawn_dist:.1f}m ahead")
 
                     if event.key == pygame.K_x:
                         for a in spawned_objects:
@@ -350,7 +443,7 @@ def main():
             detections = detector.predict(frame)
             decision = controller.update(detections, speed_mph=speed_mph)
 
-            # AEB hold for visibility (keeps braking for a short time)
+            # AEB hold for visibility
             now = time.time()
             if decision.brake > 0.0:
                 hold_brake = decision.brake
@@ -392,9 +485,8 @@ def main():
                 f"Speed: {speed_mph:.1f} mph | Cruise: {'ON' if ctrl.cruise_enabled else 'OFF'} | Target: {ctrl.target_speed_mph:.0f}",
                 f"AEB: {decision.state} | BrakeCmd: {decision.brake:.2f} | Danger: {decision.danger_score:.2f}",
                 f"Reason: {decision.reason}",
-                f"Closest: {decision.closest_class} conf={decision.closest_conf} close={decision.closest_closeness}",
+                f"Closest: {decision.closest_class} conf={decision.closest_conf:.2f} close={decision.closest_closeness:.2f}" if decision.closest_class else "Closest: None",
                 f"FPS: {current_fps:.1f}",
-            
             ]
             vis = overlay_lines(vis, lines)
 

@@ -26,7 +26,7 @@ class CarlaAdapter:
         image_height: int = 720,
         fov: int = 90,
         vehicle_filter: str = "vehicle.tesla.model3",
-        autopilot: bool = True, #will change to false wihen system is done
+        autopilot: bool = False,
     ):
         
         self.host = host
@@ -46,6 +46,8 @@ class CarlaAdapter:
         self._last_frame_ts: float = 0.0
 
         self._running = False
+
+        self.spawned_objects: list[carla.Actor] = []  
         
 
     # ---------- lifecycle ----------
@@ -71,10 +73,13 @@ class CarlaAdapter:
     def stop(self):
         self._running = False
         
+        self.clear_spawned_objects()
         self._safe_destroy(self.camera)
         self._safe_destroy(self.vehicle)
+
         self.world = None
         self.client = None
+
 
 
     # ---------- frame + telemetry ----------
@@ -187,6 +192,92 @@ class CarlaAdapter:
             pass
 
         actor = None
+
+    # ---------- environment test functions ----------
+    def get_spawn_distance_ahead(self, min_distance: float = 15.0, time_headway_s: float = 4.0) -> float:
+        if not self.vehicle:
+            return float(min_distance)
+
+        vel = self.vehicle.get_velocity()
+        speed_mps = float((vel.x ** 2 + vel.y ** 2 + vel.z ** 2) ** 0.5)
+        return float(max(min_distance, speed_mps * time_headway_s))
+
+    def waypoint_ahead(self, meters: float) -> carla.Waypoint:
+        if not self.world or not self.vehicle:
+            raise RuntimeError("CARLA world or ego vehicle is not available.")
+
+        world_map = self.world.get_map()
+        wp = world_map.get_waypoint(
+            self.vehicle.get_location(),
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+
+        nxt = wp.next(meters)
+        if not nxt:
+            return wp
+        return nxt[0]
+
+    def spawn_static_vehicle_ahead(self, meters: Optional[float] = None) -> carla.Vehicle:
+        if not self.world or not self.vehicle:
+            raise RuntimeError("CARLA world or ego vehicle is not available.")
+
+        if meters is None:
+            meters = self.get_spawn_distance_ahead()
+
+        bps = self.world.get_blueprint_library()
+        candidates = bps.filter("vehicle.*")
+        if not candidates:
+            raise RuntimeError("No vehicle blueprints found.")
+
+        bp = candidates[0]
+
+        wp = self.waypoint_ahead(meters)
+        transform = wp.transform
+        transform.location.z += 0.2
+
+        actor = self.world.try_spawn_actor(bp, transform)
+        if actor is None:
+            raise RuntimeError(f"Failed to spawn vehicle at {meters:.1f}m ahead.")
+
+        actor.set_autopilot(False)
+        try:
+            actor.set_simulate_physics(False)
+        except Exception:
+            pass
+
+        self.spawned_objects.append(actor)
+        return actor
+
+    def spawn_pedestrian_ahead(self, meters: Optional[float] = None) -> carla.Actor:
+        if not self.world or not self.vehicle:
+            raise RuntimeError("CARLA world or ego vehicle is not available.")
+
+        if meters is None:
+            meters = self.get_spawn_distance_ahead()
+
+        bps = self.world.get_blueprint_library()
+        walkers = bps.filter("walker.pedestrian.*")
+        if not walkers:
+            raise RuntimeError("No pedestrian blueprints found.")
+
+        bp = walkers[0]
+
+        wp = self.waypoint_ahead(meters)
+        transform = wp.transform
+        transform.location.z += 0.2
+
+        actor = self.world.try_spawn_actor(bp, transform)
+        if actor is None:
+            raise RuntimeError(f"Failed to spawn pedestrian at {meters:.1f}m ahead.")
+
+        self.spawned_objects.append(actor)
+        return actor
+
+    def clear_spawned_objects(self) -> None:
+        for actor in self.spawned_objects:
+            self._safe_destroy(actor)
+        self.spawned_objects.clear()
 
     @staticmethod
     def _carla_image_to_bgr(image: carla.Image) -> np.ndarray:

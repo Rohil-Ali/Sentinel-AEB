@@ -186,8 +186,7 @@ class AEBApp(ctk.CTk):
         self._worker_thread: Optional[threading.Thread] = None
         self._engineer_unlocked = False
 
-        # cruise control state 
-        self._map_name: str = "Town04" #SHOULDNT BE HERE
+        self._target_speed_mph: float = 15.0
 
         # build UI 
         self._build_ui()
@@ -590,10 +589,7 @@ class AEBApp(ctk.CTk):
             except Exception:
                 pass
 
-    def _on_map_change(self, map_name: str):
-        if map_name == self._map_name:
-            return
-
+    def _on_map_change(self):
         was_running = self._running
 
         def _switch():
@@ -607,8 +603,6 @@ class AEBApp(ctk.CTk):
                     except Exception:
                         pass
                     self._adapter = None
-
-            self._map_name = map_name
 
             if was_running:
                 self.after(0, self._start_system)
@@ -655,6 +649,7 @@ class AEBApp(ctk.CTk):
         else:
             self._start_system()
 
+    # mini factory for adapters
     def _start_system(self):
         if self._running:
             return
@@ -664,7 +659,7 @@ class AEBApp(ctk.CTk):
         def _connect():
             try:
                 if self._source == "carla":
-                    adapter = CarlaAdapter(autopilot=False, map_name=self._map_name)
+                    adapter = CarlaAdapter(autopilot=False, map_name=self._map_var.get())
                 else:
                     adapter = WebcamAdapter()
                 adapter.start()
@@ -753,7 +748,7 @@ class AEBApp(ctk.CTk):
             if self._adapter:
                 aeb_brake = decision.brake if decision.state == AEBState.BRAKING else 0.0
                 try:
-                    self._adapter.drive(aeb_brake=aeb_brake)
+                    self._adapter.drive(self._target_speed_mph, aeb_brake=aeb_brake)
                 except Exception:
                     pass
 

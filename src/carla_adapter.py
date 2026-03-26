@@ -159,7 +159,7 @@ class CarlaAdapter:
     def brake_full(self) -> None:
         self.apply_control(throttle=0.0, brake=1.0, steer=0.0)
 
-    def drive(self, target_speed_mph: float = 15.0, aeb_brake: float = 0.0) -> None:
+    def drive(self, target_speed_mph: float, aeb_brake: float = 0.0) -> None:
         """
         Drives the car at the target speed while following the lane.
         If AEB is triggered, it overrides the cruise control and brakes.

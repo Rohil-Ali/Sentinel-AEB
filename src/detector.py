@@ -1,4 +1,22 @@
-# detector.py
+"""
+detector.py – YOLO object detection for the AEB system.
+
+Wraps the Ultralytics YOLO model to run inference on camera frames,
+filter detections by class and confidence, and check if they fall
+within a forward corridor (the area in front of the car that matters for AEB).
+
+Also calculates a closeness proxy score for each detection based on
+bounding box size and position - not real distance, just a heuristic
+approach of how close/urgent something is.
+
+Interface methods:
+    predict(frame_bgr)           → run detection, return filtered list of Detections
+    set_thresholds(conf, iou)    → update confidence and IOU thresholds
+    draw_detections(frame, dets) → draw bounding boxes on a frame for debugging
+    draw_corridor(frame)         → draw the forward corridor ROI for debugging
+"""
+
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,21 +32,18 @@ class Detection:
     cls_id: int
     cls_name: str
     conf: float
-    xyxy: Tuple[int, int, int, int]  # (x1, y1, x2, y2) in pixels
-    closeness: float                 # 0..1 proxy score (bigger = closer/more urgent)
+    xyxy: Tuple[int, int, int, int]  
+    closeness: float                 
 
 
 class YOLODetector:
     """
-    Production YOLO wrapper.
-
     Responsibilities:
       - Load model once
       - Run inference on frames
       - Filter detections by class + confidence
       - Provide a "closeness proxy" for downstream AEB logic
     """
-
     def __init__(
             self, 
             weights_path: str = "yolov8n.pt", 
@@ -37,9 +52,10 @@ class YOLODetector:
             target_classes: Optional[Iterable[str]] = None, 
             device: Optional[str] = None,
             use_corridor: bool = True,
-            corridor_x_min: float = 0.10,
-            corridor_x_max: float = 0.90,
+            corridor_x_min: float = 0.30,
+            corridor_x_max: float = 0.70,
             min_bottom_y: float = 0.45,
+            imgsz: int = 640,
             ):
         
         self.model = YOLO(weights_path)
@@ -61,18 +77,24 @@ class YOLODetector:
         self.corridor_x_max = float(corridor_x_max)
         self.min_bottom_y = float(min_bottom_y)
 
+        self.imgsz = int(imgsz)
+
     def set_thresholds(self, conf: float, iou: float) -> None:
         self.conf_thresh = float(conf)
         self.iou_thresh = float(iou)
 
     def predict(self, frame_bgr: np.ndarray) -> List[Detection]:
-        """
-        Run inference on a single BGR frame and return filtered detections.
-        """
         if frame_bgr is None or frame_bgr.size == 0:
             return []
         
-        results = self.model.predict(source=frame_bgr, conf=self.conf_thresh, iou=self.iou_thresh, verbose=False, device=self.device)
+        results = self.model.predict(
+            source=frame_bgr,
+            conf=self.conf_thresh,
+            iou=self.iou_thresh,
+            verbose=False,
+            device=self.device,
+            imgsz=self.imgsz,
+        )
 
         r0 = results[0]
         detections: List[Detection] = []
@@ -179,4 +201,3 @@ class YOLODetector:
             label = f"{d.cls_name} {d.conf:.2f} close:{d.closeness:.2f}"
             cv2.putText(out, label, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         return out
-

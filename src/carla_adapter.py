@@ -1,15 +1,39 @@
+"""
+carla_adapter.py – CARLA simulator adapter for the AEB system.
+
+Handles everything to do with CARLA - connecting to the sim, spawning
+the car and camera, grabbing frames, reading speed/brake data, and
+driving the car with cruise control + lane following + AEB override.
+
+Also has some functions for spawning vehicles and pedestrians ahead
+of the car for testing AEB scenarios.
+
+Interface methods:
+    start()                      → connect to CARLA, spawn vehicle and camera
+    stop()                       → destroy everything and disconnect
+    get_frame()                  → grab latest camera frame as BGR
+    get_state()                  → get current speed, throttle, brake
+    drive(target_speed_mph, aeb_brake) → cruise at target speed, AEB overrides if active
+    apply_control(throttle, brake, steer) → send raw control to the car
+    brake_full()                 → full emergency brake
+    set_rain(intensity)          → change rain in the sim
+    spawn_static_vehicle_ahead() → drop a parked car ahead for testing
+    spawn_pedestrian_ahead()     → drop a pedestrian ahead for testing
+    clear_spawned_objects()      → remove all spawned test objects
+"""
+
 from __future__ import annotations
 
 import time
+import math
 import queue
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, List
 
 import numpy as np
 
 import carla
 
-# Dataclass to hold vehicle state information
 @dataclass
 class VehicleState:
     speed_mps: float
@@ -27,6 +51,9 @@ class CarlaAdapter:
         fov: int = 90,
         vehicle_filter: str = "vehicle.tesla.model3",
         autopilot: bool = False,
+        map_name: Optional[str] = None,
+        spawn_index: int = 50,
+        backtrack_meters: float = 60.0,
     ):
         
         self.host = host
@@ -36,6 +63,9 @@ class CarlaAdapter:
         self.fov = fov
         self.vehicle_filter = vehicle_filter
         self.autopilot = autopilot
+        self.map_name = map_name
+        self.spawn_index = spawn_index
+        self.backtrack_meters = backtrack_meters
 
         self.client: Optional[carla.Client] = None
         self.world: Optional[carla.World] = None
@@ -47,7 +77,7 @@ class CarlaAdapter:
 
         self._running = False
 
-        self.spawned_objects: list[carla.Actor] = []  
+        self.spawned_objects: List[carla.Actor] = []  
         
 
     # ---------- lifecycle ----------
@@ -55,11 +85,10 @@ class CarlaAdapter:
         if self._running: 
             return
         
-        blueprint_library = self._connect() # connect to CARLA server
-        self._spawn_vehicle(blueprint_library) # Spawn vehicle
-        self._spawn_camera(blueprint_library) # spawn camera
+        blueprint_library = self._connect() 
+        self._spawn_vehicle(blueprint_library)
+        self._spawn_camera(blueprint_library) 
 
-        # start listening to camera
         def _on_image(image: carla.Image) -> None:
             try: 
                 while self._img_queue.qsize() > 0:
@@ -77,14 +106,14 @@ class CarlaAdapter:
         self._safe_destroy(self.camera)
         self._safe_destroy(self.vehicle)
 
+        self.camera = None
+        self.vehicle = None 
         self.world = None
         self.client = None
 
 
-
     # ---------- frame + telemetry ----------
     def get_frame(self, timeout: float = 0.05) -> Optional[np.ndarray]:
-        # Returns latest BGR frame as np.ndarray, or None if no new frame arroh ived.
         if not self._running:
             return None
 
@@ -95,11 +124,9 @@ class CarlaAdapter:
             self._last_frame_ts = time.time()
             return frame
         except queue.Empty:
-            # Return last frame if we have one
             return self._last_frame
 
     def get_state(self) -> Optional[VehicleState]:
-        # Return current vehicle telemetry and last applied control.
         if not self.vehicle:
             return None
 
@@ -115,6 +142,7 @@ class CarlaAdapter:
             brake=float(ctrl.brake),
         )
     
+    
     # ---------- control ----------
     def apply_control(self, throttle: float = 0.0, brake: float = 0.0, steer: float = 0.0) -> None:
         if not self.vehicle:
@@ -124,18 +152,36 @@ class CarlaAdapter:
         brake = float(max(0.0, min(1.0, brake)))
         steer = float(max(-1.0, min(1.0, steer)))
 
-        #  disable autopilot so our brakes work
-        if self.vehicle.is_autopilot_enabled:
-            self.vehicle.set_autopilot(False)
+        self.vehicle.set_autopilot(False)
 
         self.vehicle.apply_control(carla.VehicleControl(throttle=throttle, brake=brake, steer=steer))
 
     def brake_full(self) -> None:
         self.apply_control(throttle=0.0, brake=1.0, steer=0.0)
 
+    def drive(self, target_speed_mph: float, aeb_brake: float = 0.0) -> None:
+        """
+        Drives the car at the target speed while following the lane.
+        If AEB is triggered, it overrides the cruise control and brakes.
+        """
+        if not self.vehicle or not self.world:
+            return
 
+        state = self.get_state()
+        if state is None:
+            return
+
+        steer = self._compute_lane_follow_steer()
+        cruise_throttle, cruise_brake = self._compute_cruise_control(state.speed_mph, target_speed_mph)
+
+        # AEB override
+        if aeb_brake > 0.0:
+            self.apply_control(throttle=0.0, brake=aeb_brake, steer=0.0)
+        else:
+            self.apply_control(throttle=cruise_throttle, brake=cruise_brake, steer=steer)
+
+    
     # ---------- environment ----------
-
     def set_rain(self, intensity: float) -> None:
       
         if not self.world:
@@ -147,6 +193,81 @@ class CarlaAdapter:
         weather.precipitation_deposits = intensity  
         self.world.set_weather(weather)
 
+    def set_fog(self, intensity: float) -> None:
+        if not self.world:
+            return
+
+        intensity = float(max(0.0, min(100.0, intensity)))
+        weather = self.world.get_weather()
+        weather.fog_density = intensity
+        weather.fog_distance = max(0.0, 100.0 - intensity)
+        self.world.set_weather(weather)
+
+
+    # ---------- driving helpers (internal) ----------
+    def _compute_lane_follow_steer(self, lookahead: float = 8.0) -> float:
+        """
+        Steers the car to stay in the center of the lane using waypoints ahead.
+        """
+        if not self.vehicle or not self.world:
+            return 0.0
+
+        world_map = self.world.get_map()
+        vehicle_transform = self.vehicle.get_transform()
+        wp = world_map.get_waypoint(
+            vehicle_transform.location,
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+
+        # adjust lookahead based on speed (look further at higher speeds)
+        vel = self.vehicle.get_velocity()
+        speed_mps = math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
+        dynamic_lookahead = max(lookahead, speed_mps * 0.8)
+
+        nxt = wp.next(dynamic_lookahead)
+        if not nxt:
+            return 0.0
+        target_wp = nxt[0]
+
+        # vector from vehicle to target waypoint
+        dx = target_wp.transform.location.x - vehicle_transform.location.x
+        dy = target_wp.transform.location.y - vehicle_transform.location.y
+
+        # vehicle forward direction
+        yaw_rad = math.radians(vehicle_transform.rotation.yaw)
+        fwd_x = math.cos(yaw_rad)
+        fwd_y = math.sin(yaw_rad)
+
+        # cross product to tell where to steer (- for left, + for right)
+        cross = fwd_x * dy - fwd_y * dx
+        # dot product for distance
+        dot = fwd_x * dx + fwd_y * dy
+        if dot < 0.1:
+            dot = 0.1
+
+        steer = math.atan2(cross, dot)
+        steer *= 1.8
+
+        return float(max(-1.0, min(1.0, steer)))
+
+    @staticmethod
+    def _compute_cruise_control(current_mph: float,target_mph: float) -> tuple:
+        error = target_mph - current_mph
+
+        kp_throttle = 0.11
+        kp_brake = 0.05
+
+        throttle = max(0.0, min(1.0, kp_throttle * error))
+        brake = max(0.0, min(1.0, kp_brake * (-error)))
+
+        if abs(error) < 0.5:
+            throttle *= 0.2
+            brake *= 0.2
+
+        return throttle, brake
+
+    
     # ---------- helper functions ----------
     def _spawn_camera(self, blueprint_library):
         cam_bp = blueprint_library.find("sensor.camera.rgb")
@@ -161,17 +282,33 @@ class CarlaAdapter:
         vehicle_bps = blueprint_library.filter(self.vehicle_filter)
         if not vehicle_bps:
             raise RuntimeError(f"No vehicle blueprint found for filter: {self.vehicle_filter}")
-        vehicle_bp = vehicle_bps[0] 
+        vehicle_bp = vehicle_bps[0]
 
         spawn_points = self.world.get_map().get_spawn_points()
         if not spawn_points:
             raise RuntimeError("No spawn points found on this map.")
-        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_points[0])
+
+        spawn_point = spawn_points[self.spawn_index % len(spawn_points)]
+        wp = self.world.get_map().get_waypoint(spawn_point.location)
+        prev_wps = wp.previous(self.backtrack_meters)
+        if prev_wps:
+            spawn_point = prev_wps[0].transform
+            spawn_point.location.z += 0.5 
+
+        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
         self.vehicle.set_autopilot(self.autopilot)
 
     def _connect(self):
         self.client = carla.Client(self.host, self.port)
         self.client.set_timeout(20.0)
+
+        if self.map_name:
+            current_map = self.client.get_world().get_map().name
+            if self.map_name not in current_map:
+                print(f"Loading map: {self.map_name}")
+                self.client.load_world(self.map_name)
+                time.sleep(2.0)
+
         self.world = self.client.get_world()
         blueprint_library = self.world.get_blueprint_library()
         return blueprint_library
@@ -193,6 +330,14 @@ class CarlaAdapter:
 
         actor = None
 
+    @staticmethod
+    def _carla_image_to_bgr(image: carla.Image) -> np.ndarray:
+        arr = np.frombuffer(image.raw_data, dtype=np.uint8)
+        arr = arr.reshape((image.height, image.width, 4))  
+        bgr = arr[:, :, :3]  
+        return bgr
+   
+   
     # ---------- environment test functions ----------
     def get_spawn_distance_ahead(self, min_distance: float = 15.0, time_headway_s: float = 4.0) -> float:
         if not self.vehicle:
@@ -278,11 +423,3 @@ class CarlaAdapter:
         for actor in self.spawned_objects:
             self._safe_destroy(actor)
         self.spawned_objects.clear()
-
-    @staticmethod
-    def _carla_image_to_bgr(image: carla.Image) -> np.ndarray:
-        # convert CARLA image to BGR numpy array
-        arr = np.frombuffer(image.raw_data, dtype=np.uint8)
-        arr = arr.reshape((image.height, image.width, 4))  # BGRA
-        bgr = arr[:, :, :3]  # drop alpha
-        return bgr

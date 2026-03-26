@@ -187,7 +187,6 @@ class AEBApp(ctk.CTk):
         self._engineer_unlocked = False
 
         # cruise control state 
-        self._target_speed_mph: float = 15.0 #SHOULDNT BE HERE
         self._map_name: str = "Town04" #SHOULDNT BE HERE
 
         # build UI 
@@ -239,90 +238,64 @@ class AEBApp(ctk.CTk):
         right.pack_propagate(False)
         self._build_instrument_panel(right)
 
-        # ---------- driving controls strip ------------------------------------
+        # driving controls strip
         self._build_driving_controls()
 
-        # ---------- bottom: engineer drawer -----------------------------------
+        # bottom: engineer drawer
         self._build_engineer_bar()
 
-    # ── instrument panel (right side) ────────────────────────────────────────
+    # --------- instrument panel (right side) ------------
     def _build_instrument_panel(self, parent):
 
         inner = ctk.CTkFrame(parent, fg_color=_BG_PANEL)
         inner.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # -- status --
+        # status
         sec_status = ctk.CTkFrame(inner, fg_color=_BG_CARD, corner_radius=8)
         sec_status.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(sec_status, text="SYSTEM STATUS",
-                     font=("Consolas", 10), text_color=_TEXT_DIM
-                     ).pack(anchor="w", padx=12, pady=(8, 2))
+        ctk.CTkLabel(sec_status, text="SYSTEM STATUS", font=("Consolas", 10), text_color=_TEXT_DIM).pack(anchor="w", padx=12, pady=(8, 2))    
         self._status_dot = StatusDot(sec_status)
         self._status_dot.pack(anchor="w", padx=12, pady=(0, 4))
-        self._lbl_reason = ctk.CTkLabel(
-            sec_status, text="—",
-            font=("Consolas", 10), text_color=_TEXT_DIM,
-            wraplength=240, justify="left",
-        )
+        self._lbl_reason = ctk.CTkLabel(sec_status, text="—",font=("Consolas", 10), text_color=_TEXT_DIM, wraplength=240, justify="left")
         self._lbl_reason.pack(anchor="w", padx=12, pady=(0, 8))
 
-        # -- speed --
+        # speed
         sec_speed = ctk.CTkFrame(inner, fg_color=_BG_CARD, corner_radius=8)
         sec_speed.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(sec_speed, text="SPEED",
-                     font=("Consolas", 10), text_color=_TEXT_DIM
-                     ).pack(anchor="w", padx=12, pady=(8, 0))
-        self._lbl_speed = ctk.CTkLabel(
-            sec_speed, text="0",
-            font=("Consolas", 36, "bold"), text_color=_TEXT_PRIMARY,
-        )
+        ctk.CTkLabel(sec_speed, text="SPEED", font=("Consolas", 10), text_color=_TEXT_DIM).pack(anchor="w", padx=12, pady=(8, 0))
+        self._lbl_speed = ctk.CTkLabel(sec_speed, text="0", font=("Consolas", 36, "bold"), text_color=_TEXT_PRIMARY)
         self._lbl_speed.pack(anchor="w", padx=12, pady=(0, 0))
-        ctk.CTkLabel(sec_speed, text="MPH",
-                     font=("Consolas", 10), text_color=_TEXT_DIM
-                     ).pack(anchor="w", padx=14, pady=(0, 8))
+        ctk.CTkLabel(sec_speed, text="MPH", font=("Consolas", 10), text_color=_TEXT_DIM).pack(anchor="w", padx=14, pady=(0, 8))
 
-        # -- proximity bar --
+        # proximity bar
         sec_prox = ctk.CTkFrame(inner, fg_color=_BG_CARD, corner_radius=8)
         sec_prox.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(sec_prox, text="PROXIMITY",
-                     font=("Consolas", 10), text_color=_TEXT_DIM
-                     ).pack(anchor="w", padx=12, pady=(8, 4))
+        ctk.CTkLabel(sec_prox, text="PROXIMITY", font=("Consolas", 10), text_color=_TEXT_DIM).pack(anchor="w", padx=12, pady=(8, 4))
         self._prox_bar = HorizontalBar(sec_prox, width=240, height=22)
         self._prox_bar.pack(padx=12, pady=(0, 8))
 
-        # -- gauges row --
+        # gauges row
         sec_gauges = ctk.CTkFrame(inner, fg_color=_BG_CARD, corner_radius=8)
         sec_gauges.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(sec_gauges, text="PEDALS",
-                     font=("Consolas", 10), text_color=_TEXT_DIM
-                     ).pack(anchor="w", padx=12, pady=(8, 4))
+        ctk.CTkLabel(sec_gauges, text="PEDALS", font=("Consolas", 10), text_color=_TEXT_DIM).pack(anchor="w", padx=12, pady=(8, 4))
 
         gauge_row = ctk.CTkFrame(sec_gauges, fg_color=_BG_CARD)
         gauge_row.pack(padx=12, pady=(0, 10))
 
-        self._gauge_brake = VerticalGauge(
-            gauge_row, label="BRK", fill_colour=_STATUS_RED, height=120,
-        )
+        self._gauge_brake = VerticalGauge(gauge_row, label="BRK", fill_colour=_STATUS_RED, height=120)
         self._gauge_brake.pack(side="left", padx=(0, 16))
 
-        self._gauge_throttle = VerticalGauge(
-            gauge_row, label="THR", fill_colour=_STATUS_GREEN, height=120,
-        )
+        self._gauge_throttle = VerticalGauge(gauge_row, label="THR", fill_colour=_STATUS_GREEN, height=120)
         self._gauge_throttle.pack(side="left", padx=(0, 16))
 
-        # -- detection info --
+        # detection info 
         sec_det = ctk.CTkFrame(inner, fg_color=_BG_CARD, corner_radius=8)
         sec_det.pack(fill="x", pady=(0, 0))
-        ctk.CTkLabel(sec_det, text="CLOSEST OBJECT",
-                     font=("Consolas", 10), text_color=_TEXT_DIM
-                     ).pack(anchor="w", padx=12, pady=(8, 2))
-        self._lbl_closest = ctk.CTkLabel(
-            sec_det, text="—",
-            font=("Consolas", 12), text_color=_TEXT_PRIMARY,
-        )
+        ctk.CTkLabel(sec_det, text="CLOSEST OBJECT", font=("Consolas", 10), text_color=_TEXT_DIM).pack(anchor="w", padx=12, pady=(8, 2))
+        self._lbl_closest = ctk.CTkLabel(sec_det, text="—", font=("Consolas", 12), text_color=_TEXT_PRIMARY)
         self._lbl_closest.pack(anchor="w", padx=12, pady=(0, 8))
 
-    # ── driving controls strip ───────────────────────────────────────────
+    # ------------ driving controls strip ---------------
     def _build_driving_controls(self):
         strip = ctk.CTkFrame(self, fg_color=_BG_PANEL, height=56, corner_radius=0)
         strip.pack(fill="x", padx=8, pady=(0, 4))
@@ -331,15 +304,10 @@ class AEBApp(ctk.CTk):
         inner = ctk.CTkFrame(strip, fg_color=_BG_PANEL)
         inner.pack(fill="both", expand=True, padx=8, pady=6)
 
-        # -- cruise speed section --
-        ctk.CTkLabel(inner, text="CRUISE",
-                     font=("Consolas", 9, "bold"), text_color=_TEXT_DIM,
-                     ).pack(side="left", padx=(4, 8))
+        # cruise speed section
+        ctk.CTkLabel(inner, text="CRUISE", font=("Consolas", 9, "bold"), text_color=_TEXT_DIM,).pack(side="left", padx=(4, 8))
 
-        self._lbl_target = ctk.CTkLabel(
-            inner, text="15 mph",
-            font=("Consolas", 13, "bold"), text_color=_ACCENT_CYAN, width=70,
-        )
+        self._lbl_target = ctk.CTkLabel(inner, text="15 mph", font=("Consolas", 13, "bold"), text_color=_ACCENT_CYAN, width=70)
         self._lbl_target.pack(side="left", padx=(0, 8))
 
         for spd in [10, 15, 20, 25, 30, 40, 50, 60, 70, 80]:
@@ -351,14 +319,12 @@ class AEBApp(ctk.CTk):
             )
             btn.pack(side="left", padx=2)
 
-        # -- separator --
+        # separator
         sep = ctk.CTkFrame(inner, fg_color=_BORDER_SUBTLE, width=2)
         sep.pack(side="left", fill="y", padx=12, pady=4)
 
-        # -- spawn section --
-        ctk.CTkLabel(inner, text="SPAWN",
-                     font=("Consolas", 9, "bold"), text_color=_TEXT_DIM,
-                     ).pack(side="left", padx=(0, 8))
+        # spawn section
+        ctk.CTkLabel(inner, text="SPAWN",font=("Consolas", 9, "bold"), text_color=_TEXT_DIM).pack(side="left", padx=(0, 8))
 
         self._btn_spawn_ped = ctk.CTkButton(
             inner, text="🚶 Pedestrian", width=110, height=28,
@@ -384,7 +350,7 @@ class AEBApp(ctk.CTk):
         )
         self._btn_clear.pack(side="left", padx=4)
 
-    # ── engineer bar + drawer ────────────────────────────────────────────────
+    # ------------ engineer bar + drawer ------------
     def _build_engineer_bar(self):
 
         # toggle bar
@@ -422,13 +388,11 @@ class AEBApp(ctk.CTk):
         row = ctk.CTkFrame(inner, fg_color=_BG_PANEL)
         row.pack(fill="x")
 
-        # -- source selector --
+        # source selector 
         grp1 = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
         grp1.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
-        ctk.CTkLabel(grp1, text="INPUT SOURCE",
-                     font=("Consolas", 9), text_color=_TEXT_DIM
-                     ).pack(padx=12, pady=(8, 4))
+        ctk.CTkLabel(grp1, text="INPUT SOURCE", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
 
         self._src_var = ctk.StringVar(value="carla")
         src_frame = ctk.CTkFrame(grp1, fg_color=_BG_CARD)
@@ -446,17 +410,16 @@ class AEBApp(ctk.CTk):
             command=self._on_source_change,
         ).pack(anchor="w", pady=2)
 
-        # -- confidence threshold --
+        # confidence threshold 
         grp2 = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
         grp2.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
-        ctk.CTkLabel(grp2, text="CONFIDENCE",
-                     font=("Consolas", 9), text_color=_TEXT_DIM
-                     ).pack(padx=12, pady=(8, 4))
+        ctk.CTkLabel(grp2, text="CONFIDENCE", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
         self._lbl_conf = ctk.CTkLabel(grp2, text="0.45",
                                       font=("Consolas", 12, "bold"),
                                       text_color=_ACCENT_CYAN)
         self._lbl_conf.pack(padx=12)
+
         self._slider_conf = ctk.CTkSlider(
             grp2, from_=0.1, to=0.9, number_of_steps=80, width=160,
             fg_color=_BG_INPUT, progress_color=_ACCENT_BLUE,
@@ -466,17 +429,16 @@ class AEBApp(ctk.CTk):
         self._slider_conf.set(0.45)
         self._slider_conf.pack(padx=12, pady=(4, 12))
 
-        # -- rain intensity --
+        # rain intensity 
         grp3 = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
         grp3.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
-        ctk.CTkLabel(grp3, text="RAIN INTENSITY",
-                     font=("Consolas", 9), text_color=_TEXT_DIM
-                     ).pack(padx=12, pady=(8, 4))
+        ctk.CTkLabel(grp3, text="RAIN INTENSITY", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
         self._lbl_rain = ctk.CTkLabel(grp3, text="0 %",
                                       font=("Consolas", 12, "bold"),
                                       text_color=_ACCENT_CYAN)
         self._lbl_rain.pack(padx=12)
+
         self._slider_rain = ctk.CTkSlider(
             grp3, from_=0, to=100, number_of_steps=100, width=160,
             fg_color=_BG_INPUT, progress_color=_ACCENT_BLUE,
@@ -486,17 +448,16 @@ class AEBApp(ctk.CTk):
         self._slider_rain.set(0)
         self._slider_rain.pack(padx=12, pady=(4, 12))
 
-        # -- fog intensity --
+        # fog intensity
         grp3b = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
         grp3b.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
-        ctk.CTkLabel(grp3b, text="FOG INTENSITY",
-                     font=("Consolas", 9), text_color=_TEXT_DIM
-                     ).pack(padx=12, pady=(8, 4))
+        ctk.CTkLabel(grp3b, text="FOG INTENSITY", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
         self._lbl_fog = ctk.CTkLabel(grp3b, text="0 %",
                                      font=("Consolas", 12, "bold"),
                                      text_color=_ACCENT_CYAN)
         self._lbl_fog.pack(padx=12)
+
         self._slider_fog = ctk.CTkSlider(
             grp3b, from_=0, to=100, number_of_steps=100, width=160,
             fg_color=_BG_INPUT, progress_color=_ACCENT_BLUE,
@@ -506,30 +467,28 @@ class AEBApp(ctk.CTk):
         self._slider_fog.set(0)
         self._slider_fog.pack(padx=12, pady=(4, 12))
 
-        # -- AEB toggle --
+        # AEB toggle
         grp4 = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
         grp4.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
-        ctk.CTkLabel(grp4, text="AEB ENABLED",
-                     font=("Consolas", 9), text_color=_TEXT_DIM
-                     ).pack(padx=12, pady=(8, 4))
+        ctk.CTkLabel(grp4, text="AEB ENABLED", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
+
         self._aeb_switch = ctk.CTkSwitch(
             grp4, text="", width=48,
             fg_color=_BG_INPUT, progress_color=_STATUS_GREEN,
             button_color=_TEXT_PRIMARY, button_hover_color="#D4D4D8",
             command=self._on_aeb_toggle,
         )
-        self._aeb_switch.select()  # on by default
+        self._aeb_switch.select() 
         self._aeb_switch.pack(padx=12, pady=(4, 12))
 
-        # -- map selector --
+        # map selector
         grp5 = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
         grp5.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
-        ctk.CTkLabel(grp5, text="CARLA MAP",
-                     font=("Consolas", 9), text_color=_TEXT_DIM
-                     ).pack(padx=12, pady=(8, 4))
+        ctk.CTkLabel(grp5, text="CARLA MAP",font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
         self._map_var = ctk.StringVar(value="Town04")
+
         self._map_dropdown = ctk.CTkOptionMenu(
             grp5, variable=self._map_var,
             values=["Town04", "Town10HD_Opt"],
@@ -544,7 +503,7 @@ class AEBApp(ctk.CTk):
         )
         self._map_dropdown.pack(padx=12, pady=(4, 12))
 
-    # ── engineer mode gating ─────────────────────────────────────────────────
+    # ---------- engineer mode gating -------------
     def _toggle_engineer(self):
         if self._eng_visible:
             self._eng_drawer.pack_forget()
@@ -581,7 +540,7 @@ class AEBApp(ctk.CTk):
             text="  ✓ Unlocked", text_color=_STATUS_GREEN,
         )
 
-    # ── callbacks from engineer controls ─────────────────────────────────────
+    # --------------- callbacks from engineer controls ------------------
     def _on_source_change(self):
         new_src = self._src_var.get()
         if new_src == self._source:
@@ -590,7 +549,6 @@ class AEBApp(ctk.CTk):
         was_running = self._running
 
         def _switch():
-            # synchronous stop in background thread
             if was_running:
                 self._running = False
                 if self._worker_thread and self._worker_thread.is_alive():
@@ -605,7 +563,6 @@ class AEBApp(ctk.CTk):
             self._source = new_src
 
             if was_running:
-                # schedule start on main thread (it spawns its own thread)
                 self.after(0, self._start_system)
 
         threading.Thread(target=_switch, daemon=True).start()
@@ -662,7 +619,7 @@ class AEBApp(ctk.CTk):
         enabled = bool(self._aeb_switch.get())
         self._controller.set_enabled(enabled)
 
-    # ── driving control callbacks ────────────────────────────────────────────
+    # --------------- driving control callbacks ------------------
     def _set_target_speed(self, mph: float):
         self._target_speed_mph = float(mph)
         self._lbl_target.configure(text=f"{int(mph)} mph")
@@ -736,7 +693,6 @@ class AEBApp(ctk.CTk):
     def _stop_system(self):
         self._running = False
 
-        # disable button while disconnecting
         self._btn_start.configure(text="…", state="disabled")
 
         def _disconnect():
@@ -797,10 +753,7 @@ class AEBApp(ctk.CTk):
             if self._adapter:
                 aeb_brake = decision.brake if decision.state == AEBState.BRAKING else 0.0
                 try:
-                    self._adapter.drive(
-                        target_speed_mph=self._target_speed_mph,
-                        aeb_brake=aeb_brake,
-                    )
+                    self._adapter.drive(aeb_brake=aeb_brake)
                 except Exception:
                     pass
 
@@ -914,10 +867,7 @@ class AEBApp(ctk.CTk):
         self.destroy()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  Tiny FPS helper
-# ═════════════════════════════════════════════════════════════════════════════
-
+# --------- Tiny FPS helper ---------
 class _FPSCounter:
     def __init__(self, window: int = 30):
         self._times: list[float] = []
@@ -933,11 +883,7 @@ class _FPSCounter:
             dt = self._times[-1] - self._times[0]
             self.fps = (len(self._times) - 1) / max(1e-9, dt)
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Entry point
-# ═════════════════════════════════════════════════════════════════════════════
-
+# -------- Entry point --------
 if __name__ == "__main__":
     app = AEBApp()
     app.mainloop()

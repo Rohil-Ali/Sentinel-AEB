@@ -2,9 +2,7 @@
 venv/
 
 # Research files
-research/dataset
-research/best.pt
-research/models/weights/last.pt
+research/
 
 #test fiules
 test/
@@ -14,3 +12,6 @@ runs/
 
 # model
 src/yolov8n.pt
+
+src/__pycache__/
+src/logs/

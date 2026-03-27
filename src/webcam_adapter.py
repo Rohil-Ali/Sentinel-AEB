@@ -9,8 +9,10 @@ Interface methods:
     stop()                      → release the input source
     get_frame()                 → return latest BGR frame (or None)
     get_state()                 → return VehicleState (or None)
+    get_collision()             → always False for webcam
     drive(target_speed_mph, aeb_brake) → no-op for webcam
     set_rain(intensity)         → no-op for webcam
+    set_fog(intensity)          → no-op for webcam
     spawn_pedestrian_ahead()    → no-op for webcam
     spawn_static_vehicle_ahead()→ no-op for webcam
     clear_spawned_objects()     → no-op for webcam
@@ -88,6 +90,9 @@ class WebcamAdapter:
 
     def get_state(self) -> Optional[VehicleState]:
         return None
+
+    def get_collision(self) -> bool:
+        return False
 
     # ---------- control (no-ops) ----------
     def apply_control(self, throttle: float = 0.0, brake: float = 0.0, steer: float = 0.0) -> None:

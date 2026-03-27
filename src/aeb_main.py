@@ -36,6 +36,7 @@ from carla_adapter import CarlaAdapter, VehicleState
 from webcam_adapter import WebcamAdapter
 from detector import YOLODetector, Detection
 from aeb_controller import AEBController, AEBConfig, AEBState, AEBDecision
+from blackbox_logger import BlackBoxLogger
 
 
 # --------- color palette ---------
@@ -179,14 +180,16 @@ class AEBApp(ctk.CTk):
         self._adapter = None   # CarlaAdapter | WebcamAdapter
         self._detector = YOLODetector()
         self._controller = AEBController()
+        self._logger = BlackBoxLogger()
 
         # flags 
-        self._source = "carla"  # "carla" | "webcam" #SHOULDNT BE HERE
+        self._source = "carla"  # "carla" | "webcam" 
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
         self._engineer_unlocked = False
 
         self._target_speed_mph: float = 15.0
+        self._map_name: str = "Town04"
 
         # build UI 
         self._build_ui()
@@ -414,7 +417,7 @@ class AEBApp(ctk.CTk):
         grp2.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
         ctk.CTkLabel(grp2, text="CONFIDENCE", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
-        self._lbl_conf = ctk.CTkLabel(grp2, text="0.45",
+        self._lbl_conf = ctk.CTkLabel(grp2, text="0.35",
                                       font=("Consolas", 12, "bold"),
                                       text_color=_ACCENT_CYAN)
         self._lbl_conf.pack(padx=12)
@@ -425,7 +428,7 @@ class AEBApp(ctk.CTk):
             button_color=_ACCENT_CYAN, button_hover_color="#67E8F9",
             command=self._on_conf_change,
         )
-        self._slider_conf.set(0.45)
+        self._slider_conf.set(0.35)
         self._slider_conf.pack(padx=12, pady=(4, 12))
 
         # rain intensity 
@@ -589,7 +592,10 @@ class AEBApp(ctk.CTk):
             except Exception:
                 pass
 
-    def _on_map_change(self):
+    def _on_map_change(self, map_name: str):
+        if map_name == self._map_name:
+            return
+        
         was_running = self._running
 
         def _switch():
@@ -604,6 +610,8 @@ class AEBApp(ctk.CTk):
                         pass
                     self._adapter = None
 
+            self._map_name = map_name
+            
             if was_running:
                 self.after(0, self._start_system)
 
@@ -659,7 +667,7 @@ class AEBApp(ctk.CTk):
         def _connect():
             try:
                 if self._source == "carla":
-                    adapter = CarlaAdapter(autopilot=False, map_name=self._map_var.get())
+                    adapter = CarlaAdapter(autopilot=False, map_name=self._map_name)
                 else:
                     adapter = WebcamAdapter()
                 adapter.start()
@@ -674,6 +682,7 @@ class AEBApp(ctk.CTk):
             self._adapter = adapter
             self._running = True
             self._controller.reset_states()
+            self._logger.start()
 
             self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker_thread.start()
@@ -693,6 +702,8 @@ class AEBApp(ctk.CTk):
         def _disconnect():
             if self._worker_thread and self._worker_thread.is_alive():
                 self._worker_thread.join(timeout=2.0)
+
+            self._logger.stop()
 
             if self._adapter:
                 try:
@@ -760,7 +771,22 @@ class AEBApp(ctk.CTk):
             latency = (time.perf_counter() - t0) * 1000
             fps_counter.tick()
 
-            # 8. push to shared state
+            # 8. collision check
+            collision = self._adapter.get_collision() if self._adapter else False
+
+            # 9. black box log
+            self._logger.log(
+                speed_mph=speed_mph,
+                decision=decision,
+                fps=fps_counter.fps,
+                latency_ms=latency,
+                collision=collision,
+            )
+
+            if collision:
+                self._logger.stop()
+
+            # 10. push to shared state
             with self._lock:
                 self._display_frame = display
                 self._decision = decision
@@ -851,6 +877,8 @@ class AEBApp(ctk.CTk):
 
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=2.0)
+
+        self._logger.stop()
 
         if self._adapter:
             try:

@@ -13,10 +13,12 @@ Interface methods:
     stop()                       → destroy everything and disconnect
     get_frame()                  → grab latest camera frame as BGR
     get_state()                  → get current speed, throttle, brake
+    get_collision()              → True if collision occurred since last check
     drive(target_speed_mph, aeb_brake) → cruise at target speed, AEB overrides if active
     apply_control(throttle, brake, steer) → send raw control to the car
     brake_full()                 → full emergency brake
     set_rain(intensity)          → change rain in the sim
+    set_fog(intensity)           → change fog in the sim
     spawn_static_vehicle_ahead() → drop a parked car ahead for testing
     spawn_pedestrian_ahead()     → drop a pedestrian ahead for testing
     clear_spawned_objects()      → remove all spawned test objects
@@ -33,6 +35,7 @@ from typing import Optional, List
 import numpy as np
 
 import carla
+
 
 @dataclass
 class VehicleState:
@@ -71,6 +74,8 @@ class CarlaAdapter:
         self.world: Optional[carla.World] = None
         self.vehicle: Optional[carla.Vehicle] = None
         self.camera: Optional[carla.Sensor] = None
+        self._collision_sensor: Optional[carla.Sensor] = None
+        self._collision_flag: bool = False
         self._img_queue: "queue.Queue[carla.Image]" = queue.Queue(maxsize=2)
         self._last_frame: Optional[np.ndarray] = None
         self._last_frame_ts: float = 0.0
@@ -87,7 +92,8 @@ class CarlaAdapter:
         
         blueprint_library = self._connect() 
         self._spawn_vehicle(blueprint_library)
-        self._spawn_camera(blueprint_library) 
+        self._spawn_camera(blueprint_library)
+        self._spawn_collision_sensor(blueprint_library)
 
         def _on_image(image: carla.Image) -> None:
             try: 
@@ -103,9 +109,12 @@ class CarlaAdapter:
         self._running = False
         
         self.clear_spawned_objects()
+        self._safe_destroy(self._collision_sensor)
         self._safe_destroy(self.camera)
         self._safe_destroy(self.vehicle)
 
+        self._collision_sensor = None
+        self._collision_flag = False
         self.camera = None
         self.vehicle = None 
         self.world = None
@@ -141,6 +150,12 @@ class CarlaAdapter:
             throttle=float(ctrl.throttle),
             brake=float(ctrl.brake),
         )
+
+    def get_collision(self) -> bool:
+        if self._collision_flag:
+            self._collision_flag = False
+            return True
+        return False
     
     
     # ---------- control ----------
@@ -298,6 +313,19 @@ class CarlaAdapter:
         self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
         self.vehicle.set_autopilot(self.autopilot)
 
+    # collision sensor for testing
+    def _spawn_collision_sensor(self, blueprint_library):
+        """Attach a collision sensor to the vehicle to detect impacts."""
+        col_bp = blueprint_library.find("sensor.other.collision")
+        self._collision_sensor = self.world.spawn_actor(
+            col_bp, carla.Transform(), attach_to=self.vehicle
+        )
+
+        def _on_collision(event):
+            self._collision_flag = True
+
+        self._collision_sensor.listen(_on_collision)
+
     def _connect(self):
         self.client = carla.Client(self.host, self.port)
         self.client.set_timeout(20.0)
@@ -308,7 +336,6 @@ class CarlaAdapter:
                 print(f"Loading map: {self.map_name}")
                 self.client.load_world(self.map_name)
                 time.sleep(2.0)
-
         self.world = self.client.get_world()
         blueprint_library = self.world.get_blueprint_library()
         return blueprint_library

@@ -56,7 +56,7 @@ class CarlaAdapter:
         autopilot: bool = False,
         map_name: Optional[str] = None,
         spawn_index: int = 50,
-        backtrack_meters: float = 60.0,
+        backtrack_meters: float = 850.0,
     ):
         
         self.host = host

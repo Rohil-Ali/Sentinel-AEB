@@ -143,7 +143,6 @@ class YOLODetector:
           - Bigger bbox area => closer
           - Lower bbox bottom (closer to bottom of frame) => closer
 
-        This is NOT real distance; it's a proxy useful for triggering logic.
         """
         h, w = frame_shape[0], frame_shape[1]
         x1, y1, x2, y2 = xyxy

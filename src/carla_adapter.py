@@ -218,6 +218,20 @@ class CarlaAdapter:
         weather.fog_distance = max(0.0, 100.0 - intensity)
         self.world.set_weather(weather)
 
+    def set_time(self, preset: str) -> None:
+            if not self.world:
+                return
+    
+            angles = {
+                "Day": 60.0,
+                "Dusk": 5.0,
+                "Night": -80.0,
+            }
+    
+            angle = angles.get(preset, 60.0)
+            weather = self.world.get_weather()
+            weather.sun_altitude_angle = angle
+            self.world.set_weather(weather)
 
     # ---------- driving helpers (internal) ----------
     def _compute_lane_follow_steer(self, lookahead: float = 8.0) -> float:

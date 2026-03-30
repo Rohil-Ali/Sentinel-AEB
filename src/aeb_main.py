@@ -505,6 +505,27 @@ class AEBApp(ctk.CTk):
         )
         self._map_dropdown.pack(padx=12, pady=(4, 12))
 
+        # time of day selector
+        grp6 = ctk.CTkFrame(row, fg_color=_BG_CARD, corner_radius=8)
+        grp6.pack(side="left", padx=(0, 12), pady=4, fill="y")
+ 
+        ctk.CTkLabel(grp6, text="TIME OF DAY", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
+        self._time_var = ctk.StringVar(value="Day")
+ 
+        self._time_dropdown = ctk.CTkOptionMenu(
+            grp6, variable=self._time_var,
+            values=["Day", "Dusk", "Night"],
+            width=120, height=28,
+            fg_color=_BG_INPUT, button_color=_ACCENT_BLUE,
+            button_hover_color="#2563EB",
+            text_color=_TEXT_PRIMARY, font=("Consolas", 11),
+            dropdown_fg_color=_BG_CARD,
+            dropdown_text_color=_TEXT_PRIMARY,
+            dropdown_hover_color=_ACCENT_BLUE,
+            command=self._on_time_change,
+        )
+        self._time_dropdown.pack(padx=12, pady=(4, 12))
+
     # ---------- engineer mode gating -------------
     def _toggle_engineer(self):
         if self._eng_visible:
@@ -591,6 +612,13 @@ class AEBApp(ctk.CTk):
                 self._adapter.set_fog(val)
             except Exception:
                 pass
+
+    def _on_time_change(self, preset: str):
+            if self._adapter:
+                try:
+                    self._adapter.set_time(preset)
+                except Exception:
+                    pass
 
     def _on_map_change(self, map_name: str):
         if map_name == self._map_name:

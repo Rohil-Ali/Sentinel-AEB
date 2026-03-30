@@ -111,6 +111,9 @@ class WebcamAdapter:
     def set_fog(self, intensity: float) -> None:
         pass
 
+    def set_time(self, preset: str) -> None:
+            pass
+    
     def spawn_pedestrian_ahead(self, meters: Optional[float] = None) -> None:
         pass
 

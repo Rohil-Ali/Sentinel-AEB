@@ -260,6 +260,8 @@ class AEBApp(ctk.CTk):
         self._status_dot.pack(anchor="w", padx=12, pady=(0, 4))
         self._lbl_reason = ctk.CTkLabel(sec_status, text="—",font=("Consolas", 10), text_color=_TEXT_DIM, wraplength=240, justify="left")
         self._lbl_reason.pack(anchor="w", padx=12, pady=(0, 8))
+        self._lbl_danger = ctk.CTkLabel(sec_status, text="Danger: 0.00", font=("Consolas", 11, "bold"), text_color=_STATUS_AMBER)
+        self._lbl_danger.pack(anchor="w", padx=12, pady=(0, 8))
 
         # speed
         sec_speed = ctk.CTkFrame(inner, fg_color=_BG_CARD, corner_radius=8)
@@ -417,7 +419,7 @@ class AEBApp(ctk.CTk):
         grp2.pack(side="left", padx=(0, 12), pady=4, fill="y")
 
         ctk.CTkLabel(grp2, text="CONFIDENCE", font=("Consolas", 9), text_color=_TEXT_DIM).pack(padx=12, pady=(8, 4))
-        self._lbl_conf = ctk.CTkLabel(grp2, text="0.35",
+        self._lbl_conf = ctk.CTkLabel(grp2, text="0.25",
                                       font=("Consolas", 12, "bold"),
                                       text_color=_ACCENT_CYAN)
         self._lbl_conf.pack(padx=12)
@@ -428,7 +430,7 @@ class AEBApp(ctk.CTk):
             button_color=_ACCENT_CYAN, button_hover_color="#67E8F9",
             command=self._on_conf_change,
         )
-        self._slider_conf.set(0.35)
+        self._slider_conf.set(0.25)
         self._slider_conf.pack(padx=12, pady=(4, 12))
 
         # rain intensity 
@@ -845,6 +847,8 @@ class AEBApp(ctk.CTk):
         # status
         self._status_dot.set_state(decision.state)
         self._lbl_reason.configure(text=decision.reason)
+        self._lbl_danger.configure(text=f"Danger: {decision.danger_score:.2f}")
+
 
         # speed + throttle
         if v_state:

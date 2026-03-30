@@ -284,7 +284,7 @@ class CarlaAdapter:
     def _compute_cruise_control(current_mph: float,target_mph: float) -> tuple:
         error = target_mph - current_mph
 
-        kp_throttle = 0.11
+        kp_throttle = 0.25
         kp_brake = 0.05
 
         throttle = max(0.0, min(1.0, kp_throttle * error))
@@ -412,10 +412,9 @@ class CarlaAdapter:
             meters = self.get_spawn_distance_ahead()
 
         bps = self.world.get_blueprint_library()
-        candidates = bps.filter("vehicle.*")
+        candidates = bps.filter("vehicle.dodge.charger_2020")
         if not candidates:
-            raise RuntimeError("No vehicle blueprints found.")
-
+            candidates = bps.filter("vehicle.*")
         bp = candidates[0]
 
         wp = self.waypoint_ahead(meters)

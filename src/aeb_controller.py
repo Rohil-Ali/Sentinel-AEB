@@ -46,17 +46,17 @@ class AEBDecision:
 
 @dataclass
 class AEBConfig:
-    soft_brake_threshold: float = 0.25   
+    soft_brake_threshold: float = 0.2 
     hard_brake_threshold: float = 0.40 
 
-    debounce_frames: int = 3
+    debounce_frames: int = 2
     release_debounce_frames: int = 5
 
     enabled: bool = True
-    speed_weight: float = 0.45
+    speed_weight: float = 0.6
     speed_fear_cap_mph: float = 35.0
 
-    min_brake_during_event: float = 0.6
+    min_brake_during_event: float = 1.0
 
 
 class AEBController:

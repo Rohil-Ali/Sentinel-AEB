@@ -57,6 +57,8 @@ class CarlaAdapter:
         map_name: Optional[str] = None,
         spawn_index: int = 50,
         backtrack_meters: float = 850.0,
+        remove_parked_vehicles: bool = True,
+        remove_dynamic_vehicles: bool = True,
     ):
         
         self.host = host
@@ -69,6 +71,8 @@ class CarlaAdapter:
         self.map_name = map_name
         self.spawn_index = spawn_index
         self.backtrack_meters = backtrack_meters
+        self.remove_parked_vehicles = remove_parked_vehicles
+        self.remove_dynamic_vehicles = remove_dynamic_vehicles
 
         self.client: Optional[carla.Client] = None
         self.world: Optional[carla.World] = None
@@ -92,6 +96,13 @@ class CarlaAdapter:
         
         blueprint_library = self._connect() 
         self._spawn_vehicle(blueprint_library)
+
+        if self.remove_parked_vehicles:
+            self._remove_map_parked_vehicles()
+
+        if self.remove_dynamic_vehicles:
+            self._remove_dynamic_npc_vehicles()
+            
         self._spawn_camera(blueprint_library)
         self._spawn_collision_sensor(blueprint_library)
 
@@ -380,6 +391,46 @@ class CarlaAdapter:
    
    
     # ---------- environment test functions ----------
+    def _remove_map_parked_vehicles(self) -> None:
+      
+        if not self.world:
+            return
+
+        try:
+            self.world.unload_map_layer(carla.MapLayer.ParkedVehicles)
+            print("ParkedVehicles layer unloaded.")
+            return
+        except Exception:
+            pass
+
+        try:
+            env_vehicles = self.world.get_environment_objects(carla.CityObjectLabel.Vehicles)
+            ids = {obj.id for obj in env_vehicles}
+            if ids:
+                self.world.enable_environment_objects(ids, False)
+                print(f"Hid {len(ids)} environment vehicle objects.")
+        except Exception as e:
+            print(f"Could not remove parked vehicles: {e}")
+
+
+    def _remove_dynamic_npc_vehicles(self) -> None:
+        if not self.world:
+            return
+
+        actors = self.world.get_actors().filter("vehicle.*")
+        removed = 0
+
+        for actor in actors:
+            if self.vehicle is not None and actor.id == self.vehicle.id:
+                continue
+            try:
+                actor.destroy()
+                removed += 1
+            except Exception:
+                pass
+
+        print(f"Removed {removed} non-ego vehicle actors.")
+
     def get_spawn_distance_ahead(self, min_distance: float = 15.0, time_headway_s: float = 4.0) -> float:
         if not self.vehicle:
             return float(min_distance)

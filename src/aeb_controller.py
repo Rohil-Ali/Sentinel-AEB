@@ -49,8 +49,8 @@ class AEBConfig:
     soft_brake_threshold: float = 0.25   
     hard_brake_threshold: float = 0.40 
 
-    debounce_frames: int = 3
-    release_debounce_frames: int = 5
+    debounce_frames: int = 2
+    release_debounce_frames: int = 10
 
     enabled: bool = True
     speed_weight: float = 0.35

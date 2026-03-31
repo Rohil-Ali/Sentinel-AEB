@@ -76,6 +76,9 @@ class VerticalGauge(ctk.CTkFrame):
         self._lbl_top = ctk.CTkLabel(self, text=label, font=("Consolas", 9, "bold"), text_color=_TEXT_DIM, height=16)
         self._lbl_top.pack(pady=(2, 2))
 
+        self._lbl_pct = ctk.CTkLabel(self, text="0%", font=("Consolas", 9), text_color=_TEXT_DIM, height=16)
+        self._lbl_pct.pack(pady=(2, 2))
+
         self._track = ctk.CTkFrame(self, fg_color=_BG_INPUT, corner_radius=3, border_width=1, border_color=_BORDER_SUBTLE)
         self._track.pack(fill="both", expand=True, padx=6)
         self._track.pack_propagate(False)
@@ -86,8 +89,6 @@ class VerticalGauge(ctk.CTkFrame):
         self._fill_bar = ctk.CTkFrame(self._track, fg_color=fill_colour, corner_radius=2, height=0)
         self._fill_bar.pack(fill="x", side="bottom")
 
-        self._lbl_pct = ctk.CTkLabel(self, text="0%", font=("Consolas", 9), text_color=_TEXT_DIM, height=16)
-        self._lbl_pct.pack(pady=(2, 2))
 
     def set_value(self, v: float):
         self._value = max(0.0, min(1.0, v))
@@ -157,8 +158,8 @@ class AEBApp(ctk.CTk):
 
         # window setup
         self.title("AEB System")
-        self.geometry("1250x800")  
-        self.minsize(1100, 700)  
+        self.geometry("1250x950")  
+        self.minsize(1100, 850)  
         self.configure(fg_color=_BG_DARK)
         ctk.set_appearance_mode("dark")
 
@@ -286,10 +287,10 @@ class AEBApp(ctk.CTk):
         gauge_row = ctk.CTkFrame(sec_gauges, fg_color=_BG_CARD)
         gauge_row.pack(padx=12, pady=(0, 10))
 
-        self._gauge_brake = VerticalGauge(gauge_row, label="BRK", fill_colour=_STATUS_RED, height=120)
+        self._gauge_brake = VerticalGauge(gauge_row, label="BRK", fill_colour=_STATUS_RED, height=140)
         self._gauge_brake.pack(side="left", padx=(0, 16))
 
-        self._gauge_throttle = VerticalGauge(gauge_row, label="THR", fill_colour=_STATUS_GREEN, height=120)
+        self._gauge_throttle = VerticalGauge(gauge_row, label="THR", fill_colour=_STATUS_GREEN, height=140)
         self._gauge_throttle.pack(side="left", padx=(0, 16))
 
         # detection info 
@@ -495,7 +496,7 @@ class AEBApp(ctk.CTk):
 
         self._map_dropdown = ctk.CTkOptionMenu(
             grp5, variable=self._map_var,
-            values=["Town04", "Town10HD_Opt"],
+            values=["Town04", "Town01_Opt"],
             width=140, height=28,
             fg_color=_BG_INPUT, button_color=_ACCENT_BLUE,
             button_hover_color="#2563EB",
@@ -755,11 +756,13 @@ class AEBApp(ctk.CTk):
         frame_idx = 0
         last_detections: List[Detection] = []
         detect_every_n = 2
+        latency = 0.0
 
         while self._running:
+            # ── safety-critical path starts here ──
             t0 = time.perf_counter()
 
-            # 1. grab frame 
+            # 1. grab frame
             frame = self._grab_frame()
             if frame is None:
                 time.sleep(0.02)
@@ -767,14 +770,15 @@ class AEBApp(ctk.CTk):
 
             frame_idx += 1
 
-            # 2. detect 
-            if frame_idx % detect_every_n == 0:
+            # 2. detect (or reuse)
+            ran_detection = frame_idx % detect_every_n == 0
+            if ran_detection:
                 detections = self._detector.predict(frame)
                 last_detections = detections
             else:
                 detections = last_detections
 
-            # 3. vehicle state 
+            # 3. vehicle state
             v_state: Optional[VehicleState] = None
             speed_mph = 0.0
             if self._adapter:
@@ -784,6 +788,12 @@ class AEBApp(ctk.CTk):
 
             # 4. AEB decision
             decision = self._controller.update(detections, speed_mph)
+
+            # ── safety-critical path ends here ──
+            # only update latency on detection frames; skip frames
+            # reuse stale detections so their timing is meaningless
+            if ran_detection:
+                latency = (time.perf_counter() - t0) * 1000
 
             # 5. drive (adapter handles cruise + AEB)
             if self._adapter:
@@ -798,7 +808,6 @@ class AEBApp(ctk.CTk):
             display = self._detector.draw_detections(display, detections)
 
             # 7. timing
-            latency = (time.perf_counter() - t0) * 1000
             fps_counter.tick()
 
             # 8. collision check

@@ -157,8 +157,8 @@ class AEBApp(ctk.CTk):
 
         # window setup
         self.title("AEB System")
-        self.geometry("1100x740")
-        self.minsize(960, 660)
+        self.geometry("1250x800")  
+        self.minsize(1100, 700)  
         self.configure(fg_color=_BG_DARK)
         ctk.set_appearance_mode("dark")
 
@@ -188,7 +188,7 @@ class AEBApp(ctk.CTk):
         self._worker_thread: Optional[threading.Thread] = None
         self._engineer_unlocked = False
 
-        self._target_speed_mph: float = 15.0
+        self._target_speed_mph: float = 20.0
         self._map_name: str = "Town04"
 
         # build UI 
@@ -311,7 +311,7 @@ class AEBApp(ctk.CTk):
         # cruise speed section
         ctk.CTkLabel(inner, text="CRUISE", font=("Consolas", 9, "bold"), text_color=_TEXT_DIM,).pack(side="left", padx=(4, 8))
 
-        self._lbl_target = ctk.CTkLabel(inner, text="15 mph", font=("Consolas", 13, "bold"), text_color=_ACCENT_CYAN, width=70)
+        self._lbl_target = ctk.CTkLabel(inner, text="20 mph", font=("Consolas", 13, "bold"), text_color=_ACCENT_CYAN, width=70)
         self._lbl_target.pack(side="left", padx=(0, 8))
 
         for spd in [10, 15, 20, 25, 30, 40, 50, 60, 70, 80]:

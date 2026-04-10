@@ -6,6 +6,12 @@ opencv-python
 pandas
 numpy
 
+# --- Simulation ---
+carla
+
+# --- GUI ---
+customtkinter
+Pillow
 
 # --- Jupyter Notebook Support ---
 ipykernel
